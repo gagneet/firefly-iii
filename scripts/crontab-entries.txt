@@ -1,0 +1,8 @@
+# Firefly III Cron Jobs
+# Add these lines to your crontab using: crontab -e
+
+# Run Firefly III recurring transactions and maintenance tasks (daily at midnight)
+0 0 * * * cd /home/gagneet/firefly && php artisan schedule:run >> /dev/null 2>&1
+
+# Backup database (daily at 2 AM)
+0 2 * * * /home/gagneet/firefly/scripts/backup-firefly.sh >> /dev/null 2>&1

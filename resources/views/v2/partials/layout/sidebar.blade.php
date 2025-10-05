@@ -206,3 +206,25 @@
 </aside>
 
 <!-- simple script for logout thing -->
+<script nonce="{{ \FireflyIII\Support\Http\ContentSecurityPolicy::getNonce() }}">
+    document.addEventListener('DOMContentLoaded', function() {
+        const logoutLink = document.querySelector('.logout-link');
+        if (logoutLink) {
+            logoutLink.addEventListener('click', function(e) {
+                e.preventDefault();
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = '{{ route('logout') }}';
+
+                const csrfToken = document.createElement('input');
+                csrfToken.type = 'hidden';
+                csrfToken.name = '_token';
+                csrfToken.value = '{{ csrf_token() }}';
+
+                form.appendChild(csrfToken);
+                document.body.appendChild(form);
+                form.submit();
+            });
+        }
+    });
+</script>
