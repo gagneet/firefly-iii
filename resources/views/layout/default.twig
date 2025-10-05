@@ -287,5 +287,17 @@
     <input type="hidden" name="_token" value="{{ csrf_token() }}"/>
 </form>
 
+<script nonce="{{ JS_NONCE }}">
+    document.addEventListener('DOMContentLoaded', function() {
+        const logoutLinks = document.querySelectorAll('.logout-link');
+        logoutLinks.forEach(function(link) {
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                document.getElementById('logout-form').submit();
+            });
+        });
+    });
+</script>
+
 </body>
 </html>
