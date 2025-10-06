@@ -1,0 +1,39 @@
+# Environment files with secrets
+.importer.env
+
+# Import files (may contain sensitive data)
+import/*.csv
+import/*.pdf
+*.pdf
+
+# Configuration files (may contain account details)
+configurations/*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Output files
+*.csv
+firefly_import*.csv
+
+# Logs
+*.log

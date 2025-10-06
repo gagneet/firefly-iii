@@ -337,7 +337,7 @@ export default {
                         let rate = current.attributes.rate;
                         let inverse = '';
                         let rate_id = current.id;
-                        let inverse_id = '0';
+                        let inverse_id = 0;
                         let key = from_code + '_' + to_code + '_' + format(date, 'yyyy-MM-dd');
                         // console.log('Key is now "' + key + '"');
 
@@ -346,6 +346,7 @@ export default {
                             // console.log('Inverse rate found!');
                             key = to_code + '_' + from_code + '_' + format(date, 'yyyy-MM-dd');
                             rate = '';
+                            rate_id = 0;
                             inverse = current.attributes.rate;
                             inverse_id = current.id;
                             // console.log('Key updated to "' + key + '"');

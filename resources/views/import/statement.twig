@@ -1,0 +1,41 @@
+{% extends "./layout/default" %}
+
+{% block breadcrumbs %}
+    {{ Breadcrumbs.render(Route.getCurrentRoute.getName) }}
+{% endblock %}
+
+{% block content %}
+    <div class="row">
+        <div class="col-lg-8 col-lg-offset-2 col-md-10 col-md-offset-1 col-sm-12">
+            <div class="box box-default">
+                <div class="box-header with-border">
+                    <h1 class="box-title">
+                        <i class="fa fa-file-pdf-o"></i>
+                        Import Bank Statement
+                    </h1>
+                </div>
+                <div class="box-body">
+                    <p class="lead">
+                        Upload Australian bank statements (PDF) and automatically import transactions
+                    </p>
+
+                    <div id="statement-import-app">
+                        <statement-import></statement-import>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+    <script src="v1/js/app_vue.js?v={{ FF_VERSION }}" type="text/javascript" nonce="{{ JS_NONCE }}"></script>
+    <script nonce="{{ JS_NONCE }}">
+        // Initialize Vue for statement import
+        if (document.getElementById('statement-import-app')) {
+            new Vue({
+                el: '#statement-import-app'
+            });
+        }
+    </script>
+{% endblock %}

@@ -748,6 +748,20 @@ Route::group(
     }
 );
 
+// Statement Import API routes (Australian banks PDF upload):
+Route::group(
+    [
+        'namespace' => 'FireflyIII\Http\Controllers',
+        'prefix'    => 'v1/statement-import',
+        'as'        => 'api.v1.statement-import.',
+    ],
+    static function (): void {
+        Route::get('banks', ['uses' => 'StatementImportController@getSupportedBanks', 'as' => 'banks']);
+        Route::post('upload', ['uses' => 'StatementImportController@upload', 'as' => 'upload']);
+        Route::get('history', ['uses' => 'StatementImportController@history', 'as' => 'history']);
+    }
+);
+
 // Webhook API routes:
 Route::group(
     [

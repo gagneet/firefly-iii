@@ -25,8 +25,15 @@ import Vue from 'vue';
 import VueI18n from 'vue-i18n'
 import * as uiv from 'uiv';
 
+// Import statement import component
+import StatementImport from './components/imports/StatementImport.vue';
+
 window.vuei18n = VueI18n;
 window.uiv = uiv;
 Vue.use(vuei18n);
 Vue.use(uiv);
+
+// Register statement import component globally
+Vue.component('statement-import', StatementImport);
+
 window.Vue = Vue;

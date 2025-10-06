@@ -1421,6 +1421,14 @@ Route::group(
     }
 );
 
+// Statement Import Controller (Australian banks PDF upload)
+Route::group(
+    ['middleware' => 'user-full-auth', 'namespace' => 'FireflyIII\Http\Controllers', 'prefix' => 'import/statement', 'as' => 'import.statement.'],
+    static function (): void {
+        Route::get('', ['uses' => 'StatementImportController@index', 'as' => 'index']);
+    }
+);
+
 // User Group / Administrations Controller.
 Route::group(
     ['middleware' => 'user-full-auth', 'namespace' => 'FireflyIII\Http\Controllers', 'prefix' => 'administrations', 'as' => 'administrations.'],

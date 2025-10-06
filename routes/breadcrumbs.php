@@ -628,6 +628,15 @@ Breadcrumbs::for(
     }
 );
 
+// IMPORT
+Breadcrumbs::for(
+    'import.statement.index',
+    static function (Generator $breadcrumbs): void {
+        $breadcrumbs->parent('home');
+        $breadcrumbs->push('Import Bank Statement', route('import.statement.index'));
+    }
+);
+
 // PIGGY BANKS
 Breadcrumbs::for(
     'piggy-banks.index',

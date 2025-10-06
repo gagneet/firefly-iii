@@ -196,6 +196,13 @@
         </li>
     {% endif %}
 
+    <li class="{{ activeRoutePartial('import.statement') }}" id="import-statement-menu">
+        <a href="{{ route('import.statement.index') }}">
+            <em class="fa fa-file-pdf-o fa-fw"></em>
+            <span>Import Bank Statement</span>
+        </a>
+    </li>
+
     <li class="{{ activeRoutePartial('administrations') }} {{ activeRoutePartial('setting') }} {{ activeRoutePartial('profile') }} {{ activeRoutePartial('preferences') }} {{ activeRoutePartial('currencies') }} {{ activeRoutePartial('exchange-rates') }} treeview"
         id="option-menu">
         <a href="#">

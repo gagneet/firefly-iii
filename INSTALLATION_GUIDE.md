@@ -491,27 +491,149 @@ chmod +x /home/gagneet/firefly/scripts/backup-firefly.sh
 
 ### Setup Cron Jobs
 
+Firefly III requires a daily cron job for recurring transactions, exchange rate updates, and other maintenance tasks.
+
 ```bash
 # Edit crontab
 crontab -e
+```
 
-# Add these lines:
-# Run Firefly III recurring transactions and maintenance (daily at midnight)
-0 0 * * * cd /home/gagneet/firefly && php artisan schedule:run >> /dev/null 2>&1
+**Add these cron jobs:**
+
+```bash
+# Firefly III daily cron job (runs all tasks including exchange rates)
+# Runs at 3:00 AM daily
+0 3 * * * cd /home/gagneet/firefly && php artisan firefly-iii:cron >> /dev/null 2>&1
 
 # Backup database (daily at 2 AM)
 0 2 * * * /home/gagneet/firefly/scripts/backup-firefly.sh >> /dev/null 2>&1
 ```
 
-Verify cron jobs:
+**Important:** Do NOT use `php artisan schedule:run` - Firefly III no longer uses Laravel's scheduler. Always use `php artisan firefly-iii:cron` instead.
+
+**Verify cron jobs:**
 
 ```bash
 crontab -l | grep firefly
 ```
 
+**Test cron job manually:**
+
+```bash
+cd /home/gagneet/firefly
+php artisan firefly-iii:cron --force
+```
+
+**What the cron job does:**
+- Downloads exchange rates (if enabled)
+- Creates recurring transactions
+- Sends bill/subscription warnings
+- Checks for Firefly III updates
+- Processes webhook messages
+- Creates auto-budgets
+
 ---
 
 ## Advanced Features
+
+### Exchange Rates Configuration
+
+Firefly III can automatically download exchange rates for multi-currency support.
+
+#### Enable Exchange Rates
+
+**1. Configure .env settings:**
+
+```bash
+# Already set in the .env configuration above
+ENABLE_EXCHANGE_RATES=true
+ENABLE_EXTERNAL_RATES=true
+```
+
+**2. Enable required currencies:**
+
+Firefly III only downloads rates for enabled currencies. Enable the currencies you need:
+
+```bash
+# Via web interface:
+# Go to Options → Currencies → Enable the currencies you need
+
+# Or via database directly:
+mysql -u fireflyuser -p'YourPassword' firefly_db -e "UPDATE transaction_currencies SET enabled = 1 WHERE code IN ('USD', 'EUR', 'GBP', 'AUD', 'INR', 'CAD');"
+```
+
+**3. Verify cron job is configured:**
+
+The `firefly-iii:cron` job (configured above) automatically downloads exchange rates.
+
+**4. Download exchange rates manually (for testing):**
+
+```bash
+cd /home/gagneet/firefly
+php artisan firefly-iii:cron --download-cer --force
+```
+
+**5. Verify rates were downloaded:**
+
+```bash
+mysql -u fireflyuser -p'YourPassword' firefly_db -e "SELECT from_curr.code as from_currency, to_curr.code as to_currency, COUNT(*) as count FROM currency_exchange_rates cer JOIN transaction_currencies from_curr ON cer.from_currency_id = from_curr.id JOIN transaction_currencies to_curr ON cer.to_currency_id = to_curr.id GROUP BY from_curr.code, to_curr.code ORDER BY from_curr.code, to_curr.code;"
+```
+
+#### How Exchange Rates Work
+
+- **Source:** Rates are downloaded from Firefly III's Azure storage bucket
+- **Frequency:** Rates are updated approximately weekly
+- **Supported currencies:** Only standard, built-in currencies (USD, EUR, GBP, AUD, INR, CAD, JPY, etc.)
+- **No API keys needed:** The service is provided by Firefly III
+- **Historical rates:** Only current week rates are downloaded (historical rates are not available)
+- **Update schedule:** The cron job downloads rates every ~12 hours (if more than 12 hours have passed since last download)
+
+#### Common Exchange Rate Pairs
+
+After enabling currencies and running the cron job, you'll have rates for pairs like:
+
+- AUD ↔ USD
+- USD ↔ EUR
+- INR ↔ AUD
+- GBP ↔ USD
+- CAD ↔ USD
+- And many more combinations
+
+#### Manual Rate Management
+
+You can also manually add or edit exchange rates:
+
+1. Go to Options → Exchange rates
+2. Select currency pair (e.g., AUD/USD)
+3. Add or edit rates for specific dates
+4. Both forward and inverse rates are supported
+
+**View exchange rates:**
+- Web interface: https://firefly.gagneet.com/exchange-rates
+- API endpoint: `GET /api/v1/exchange-rates/{from}/{to}`
+
+#### Troubleshooting Exchange Rates
+
+**If rates aren't downloading:**
+
+```bash
+# 1. Check if external rates are enabled
+grep ENABLE_EXTERNAL_RATES .env
+
+# 2. Check if currencies are enabled
+mysql -u fireflyuser -p firefly_db -e "SELECT code, name, enabled FROM transaction_currencies WHERE enabled = 1;"
+
+# 3. Check cron job logs
+tail -100 storage/logs/laravel-$(date +%Y-%m-%d).log | grep -i "exchange"
+
+# 4. Force download and check for errors
+php artisan firefly-iii:cron --download-cer --force
+```
+
+**If you see "default exchange rate is 1" warning:**
+- Enable the currencies you're using
+- Run the download cron job
+- Wait for rates to be downloaded (runs approximately every 12 hours)
 
 ### Email Notifications (Optional)
 
@@ -860,11 +982,20 @@ php artisan route:list
 # Check queue status
 php artisan queue:work
 
-# Run cron manually
-php artisan schedule:run
+# Run cron manually (all tasks)
+php artisan firefly-iii:cron --force
+
+# Run only exchange rate download
+php artisan firefly-iii:cron --download-cer --force
+
+# Run only recurring transactions
+php artisan firefly-iii:cron --create-recurring --force
 
 # Check Firefly version
 php artisan firefly-iii:output-version
+
+# Recalculate primary currency amounts (after enabling exchange rates)
+php artisan firefly-iii:correction:recalculate-pc-amounts
 
 # Test email configuration
 php artisan tinker
@@ -897,9 +1028,11 @@ This installation configured:
 - ✅ Cron jobs for recurring transactions
 - ✅ Security headers and hardening
 - ✅ Audit logging enabled
-- ✅ Exchange rates enabled
+- ✅ Exchange rates enabled with automated downloads
+- ✅ Multi-currency support (AUD, USD, INR enabled)
 - ✅ Webhooks enabled
 - ✅ Running balance enabled
+- ✅ Daily cron job for automated tasks
 
 **Installation Date:** October 5, 2025
 **Firefly III Version:** 6.4.0
