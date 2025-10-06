@@ -31,11 +31,26 @@
 {% block scripts %}
     <script src="v1/js/app_vue.js?v={{ FF_VERSION }}" type="text/javascript" nonce="{{ JS_NONCE }}"></script>
     <script nonce="{{ JS_NONCE }}">
-        // Initialize Vue for statement import
-        if (document.getElementById('statement-import-app')) {
-            new Vue({
-                el: '#statement-import-app'
-            });
-        }
+        // Enable Vue devtools and warnings
+        Vue.config.devtools = true;
+        Vue.config.productionTip = false;
+        Vue.config.silent = false;
+
+        // Initialize Vue for statement import after DOM is ready
+        document.addEventListener('DOMContentLoaded', function() {
+            if (document.getElementById('statement-import-app')) {
+                try {
+                    new Vue({
+                        el: '#statement-import-app',
+                        errorCaptured(err, vm, info) {
+                            console.error('Vue error:', err, info);
+                            return false;
+                        }
+                    });
+                } catch (e) {
+                    console.error('Failed to initialize Vue:', e);
+                }
+            }
+        });
     </script>
 {% endblock %}

@@ -24,7 +24,7 @@ let mix = require('laravel-mix');
 mix.webpackConfig({
     resolve: {
         alias: {
-            'vue$': 'vue/dist/vue.runtime.common.js'
+            'vue$': 'vue/dist/vue.esm.js'
         },
         fallback: {
             "stream": require.resolve("stream-browserify"),
