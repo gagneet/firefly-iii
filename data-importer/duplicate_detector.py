@@ -139,25 +139,27 @@ class DuplicateDetector:
     ) -> Tuple[List[Transaction], List[Tuple[Transaction, Transaction]]]:
         """
         Find duplicate transactions in a list
+        Optimized using transaction_id hash for O(n) performance
 
         Returns:
             Tuple of (unique_transactions, duplicate_pairs)
         """
-        seen = set()
+        seen_ids = {}  # transaction_id -> Transaction object
         duplicates = []
         unique = []
 
-        for i, txn in enumerate(transactions):
-            is_dup = False
+        for txn in transactions:
+            # Use transaction_id hash for quick duplicate detection
+            # transaction_id is based on: date, description, amount, account
+            txn_id = txn.transaction_id
 
-            for j in range(i):
-                if self.is_duplicate(txn, transactions[j]):
-                    duplicates.append((transactions[j], txn))
-                    is_dup = True
-                    break
-
-            if not is_dup:
+            if txn_id in seen_ids:
+                # Found exact duplicate (same date, description, amount, account)
+                duplicates.append((seen_ids[txn_id], txn))
+            else:
+                # Not a duplicate - add to unique list
                 unique.append(txn)
+                seen_ids[txn_id] = txn
 
         return unique, duplicates
 
@@ -167,16 +169,47 @@ class DuplicateDetector:
     ) -> List[Tuple[Transaction, Transaction]]:
         """
         Find transfer pairs (money moving between your own accounts)
+        Optimized using date+amount indexing for better performance
 
         Returns:
             List of transfer pairs
         """
         transfers = []
 
-        for i, txn1 in enumerate(transactions):
-            for txn2 in transactions[i+1:]:
-                if self.is_transfer_pair(txn1, txn2):
-                    transfers.append((txn1, txn2))
+        # Group transactions by date for faster lookup
+        by_date = {}
+        for txn in transactions:
+            date_key = txn.date
+            if date_key not in by_date:
+                by_date[date_key] = []
+            by_date[date_key].append(txn)
+
+        # Check for transfers only within same date (much faster)
+        for date_key, date_txns in by_date.items():
+            # Also check adjacent dates (within tolerance)
+            date_obj = datetime.strptime(date_key, '%Y-%m-%d')
+            dates_to_check = [date_key]
+
+            for days_offset in range(1, self.date_tolerance_days + 1):
+                next_date = (date_obj + timedelta(days=days_offset)).strftime('%Y-%m-%d')
+                prev_date = (date_obj - timedelta(days=days_offset)).strftime('%Y-%m-%d')
+                if next_date in by_date:
+                    dates_to_check.append(next_date)
+                if prev_date in by_date:
+                    dates_to_check.append(prev_date)
+
+            # Compare transactions within date range
+            all_candidates = []
+            for d in dates_to_check:
+                if d in by_date:
+                    all_candidates.extend(by_date[d])
+
+            for i, txn1 in enumerate(date_txns):
+                for txn2 in all_candidates:
+                    if txn1 is not txn2 and self.is_transfer_pair(txn1, txn2):
+                        # Avoid duplicate pairs
+                        if (txn2, txn1) not in transfers:
+                            transfers.append((txn1, txn2))
 
         return transfers
 

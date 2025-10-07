@@ -168,7 +168,7 @@ class StatementImportController extends Controller
         ];
 
         $process = new Process($command);
-        $process->setTimeout(60); // 60 seconds timeout
+        $process->setTimeout(300); // 5 minutes timeout for large/complex PDFs
 
         try {
             $process->mustRun();

@@ -30,6 +30,9 @@ class FireflyService:
             'Accept': 'application/json',
             'Content-Type': 'application/json'
         }
+        # Cache for account lookups to reduce API calls
+        self._account_cache = {}  # name -> account_id
+        self._account_list_cache = {}  # account_type -> list of accounts
 
     def test_connection(self) -> bool:
         """Test connection to Firefly III API"""
@@ -46,7 +49,7 @@ class FireflyService:
 
     def get_accounts(self, account_type: str = 'asset') -> List[Dict]:
         """
-        Get all accounts of a specific type
+        Get all accounts of a specific type (with caching)
 
         Args:
             account_type: Type of account (asset, expense, revenue, etc.)
@@ -54,6 +57,10 @@ class FireflyService:
         Returns:
             List of account dictionaries
         """
+        # Check cache first
+        if account_type in self._account_list_cache:
+            return self._account_list_cache[account_type]
+
         try:
             response = requests.get(
                 f'{self.firefly_url}/api/v1/accounts',
@@ -63,7 +70,10 @@ class FireflyService:
             )
 
             if response.status_code == 200:
-                return response.json().get('data', [])
+                accounts = response.json().get('data', [])
+                # Cache the result
+                self._account_list_cache[account_type] = accounts
+                return accounts
             else:
                 print(f"Error fetching accounts: {response.status_code}")
                 return []
