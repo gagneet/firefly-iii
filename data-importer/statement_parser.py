@@ -65,6 +65,14 @@ class AmexParser:
                 while i < len(lines):
                     line = lines[i].strip()
 
+                    # Stop at summary sections
+                    if any(keyword in line for keyword in [
+                        'Account Summary',
+                        'Cashback Account Summary',
+                        'Card Member Offers'
+                    ]):
+                        break
+
                     # Skip empty lines and section headers
                     if not line or 'TRANSACTION DETAILS' in line or 'Card Number' in line:
                         i += 1
