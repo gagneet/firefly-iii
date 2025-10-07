@@ -56,8 +56,18 @@ class StatementImportController extends Controller
             ],
             [
                 'value' => 'commbank',
-                'label' => 'Commonwealth Bank',
-                'description' => 'Commonwealth Bank accounts'
+                'label' => 'Commonwealth Bank (Credit Card)',
+                'description' => 'Commonwealth Bank credit card statements'
+            ],
+            [
+                'value' => 'commbank_homeloan',
+                'label' => 'Commonwealth Bank (Home Loan)',
+                'description' => 'Commonwealth Bank home loan statements'
+            ],
+            [
+                'value' => 'commbank_offset',
+                'label' => 'Commonwealth Bank (Everyday Offset)',
+                'description' => 'Commonwealth Bank Everyday Offset account statements'
             ]
         ];
 
@@ -71,7 +81,7 @@ class StatementImportController extends Controller
     {
         $request->validate([
             'file' => 'required|file|mimes:pdf|max:10240', // Max 10MB
-            'bank_type' => 'required|string|in:amex,ing_orange,ing_savings,ubank,commbank',
+            'bank_type' => 'required|string|in:amex,ing_orange,ing_savings,ubank,commbank,commbank_homeloan,commbank_offset',
             'detect_duplicates' => 'boolean',
             'detect_transfers' => 'boolean'
         ]);
@@ -86,15 +96,17 @@ class StatementImportController extends Controller
             Log::info('Statement uploaded', [
                 'filename' => $filename,
                 'bank_type' => $request->input('bank_type'),
-                'size' => $file->getSize()
+                'size' => $file->getSize(),
+                'user_authenticated' => auth()->check(),
+                'user_id' => auth()->id()
             ]);
 
             // Process PDF and import transactions
             $result = $this->processStatement(
                 $fullPath,
                 $request->input('bank_type'),
-                $request->input('detect_duplicates', true),
-                $request->input('detect_transfers', true)
+                filter_var($request->input('detect_duplicates', true), FILTER_VALIDATE_BOOLEAN),
+                filter_var($request->input('detect_transfers', true), FILTER_VALIDATE_BOOLEAN)
             );
 
             // Clean up uploaded file
@@ -135,7 +147,7 @@ class StatementImportController extends Controller
         bool $detectDuplicates,
         bool $detectTransfers
     ): array {
-        $pythonScript = base_path('../data-importer/firefly_service.py');
+        $pythonScript = base_path('data-importer/firefly_service.py');
         $fireflyUrl = config('app.url');
         $accessToken = $this->getUserAccessToken();
 
@@ -150,7 +162,9 @@ class StatementImportController extends Controller
             $bankType,
             $pdfPath,
             $fireflyUrl,
-            $accessToken
+            $accessToken,
+            $detectDuplicates ? '1' : '0',
+            $detectTransfers ? '1' : '0'
         ];
 
         $process = new Process($command);
@@ -160,7 +174,12 @@ class StatementImportController extends Controller
             $process->mustRun();
 
             $output = $process->getOutput();
-            Log::info('Python process output', ['output' => $output]);
+            $errorOutput = $process->getErrorOutput();
+            Log::info('Python process completed', [
+                'output' => $output,
+                'error_output' => $errorOutput,
+                'exit_code' => $process->getExitCode()
+            ]);
 
             // Parse output for results
             // The Python script outputs JSON-like results
@@ -199,7 +218,9 @@ class StatementImportController extends Controller
                 'created' => $created,
                 'duplicates' => $duplicates,
                 'transfers' => $transfers,
-                'errors' => $errors
+                'errors' => $errors,
+                'debug_output' => $output,  // Add raw output for debugging
+                'debug_error' => $errorOutput
             ];
 
         } catch (ProcessFailedException $exception) {
@@ -225,24 +246,32 @@ class StatementImportController extends Controller
             return $token;
         }
 
-        // In production, you'd want to use the authenticated user's token
-        // For now, we'll use a Passport token if available
+        // Get authenticated user
         $user = auth()->user();
 
         if (!$user) {
+            Log::error('No authenticated user found for statement import');
             return null;
         }
 
-        // Check if user has a personal access token
-        $token = $user->tokens()->where('name', 'Statement Import')->first();
+        Log::info('Getting access token for user', ['user_id' => $user->id, 'email' => $user->email]);
 
-        if ($token) {
-            return $token->accessToken;
+        // Always create a fresh token for each import
+        // We can't reuse old tokens because we can't retrieve the token string from the database
+        try {
+            $newToken = $user->createToken('Statement Import');
+            Log::info('Created new token for import', ['user_id' => $user->id]);
+
+            // Passport's createToken returns a PersonalAccessTokenResult object
+            // The accessToken property contains the plain text token
+            return $newToken->accessToken;
+        } catch (\Exception $e) {
+            Log::error('Failed to create token', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return null;
         }
-
-        // Create a new personal access token
-        $newToken = $user->createToken('Statement Import');
-        return $newToken->accessToken;
     }
 
     /**

@@ -109,8 +109,8 @@ class DuplicateDetector:
         Determine if two transactions are duplicates
         (same transaction appearing in multiple statements)
         """
-        # Don't compare same transaction to itself
-        if txn1.transaction_id == txn2.transaction_id:
+        # Don't compare same transaction object to itself
+        if txn1 is txn2:
             return False
 
         # Different accounts might have legitimate same transactions

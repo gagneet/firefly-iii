@@ -97,7 +97,8 @@ class FireflyService:
             'name': account_name,
             'type': account_type,
             'currency_code': currency_code,
-            'active': True
+            'active': True,
+            'account_role': 'defaultAsset' if account_type == 'asset' else None  # Required for asset accounts
         }
 
         try:
@@ -186,12 +187,18 @@ class FireflyService:
                 timeout=10
             )
 
-            if response.status_code in [200, 422]:  # 422 is duplicate
-                if response.status_code == 422:
-                    return {'status': 'duplicate'}
+            if response.status_code == 200:
                 return response.json().get('data')
+            elif response.status_code == 422:
+                # Could be duplicate or validation error
+                error_data = response.json()
+                if 'duplicate' in str(error_data).lower():
+                    return {'status': 'duplicate'}
+                else:
+                    print(f"Validation error for transaction '{transaction.description[:40]}': {response.text}")
+                    return None
             else:
-                print(f"Error creating transaction: {response.status_code} - {response.text}")
+                print(f"Error creating transaction '{transaction.description[:40]}': {response.status_code} - {response.text}")
                 return None
         except Exception as e:
             print(f"Error: {e}")
@@ -316,6 +323,11 @@ class FireflyService:
 
         # Import transactions
         for txn in transactions_to_import:
+            # Skip zero-amount transactions (like fee waivers)
+            if abs(txn.amount) < 0.01:
+                print(f"Skipping zero-amount transaction: {txn.description}")
+                continue
+
             if txn.amount < 0:
                 # Expense: source = user account, destination = merchant/expense
                 source_account = txn.account
@@ -342,7 +354,9 @@ def process_pdf_and_import(
     pdf_path: str,
     bank_type: str,
     firefly_url: str,
-    access_token: str
+    access_token: str,
+    detect_duplicates: bool = True,
+    detect_transfers: bool = True
 ) -> Dict:
     """
     Process a PDF statement and import to Firefly III
@@ -352,6 +366,8 @@ def process_pdf_and_import(
         bank_type: Bank type (amex, ing_orange, etc.)
         firefly_url: Firefly III URL
         access_token: API access token
+        detect_duplicates: Whether to detect and skip duplicates
+        detect_transfers: Whether to detect transfers between accounts
 
     Returns:
         Import statistics
@@ -374,7 +390,7 @@ def process_pdf_and_import(
     if not service.test_connection():
         return {'error': 'Cannot connect to Firefly III API'}
 
-    return service.import_transactions(transactions)
+    return service.import_transactions(transactions, detect_duplicates, detect_transfers)
 
 
 if __name__ == '__main__':
@@ -382,16 +398,21 @@ if __name__ == '__main__':
     import os
 
     if len(sys.argv) < 5:
-        print("Usage: python firefly_service.py <bank_type> <pdf_file> <firefly_url> <access_token>")
+        print("Usage: python firefly_service.py <bank_type> <pdf_file> <firefly_url> <access_token> [detect_duplicates] [detect_transfers]")
         sys.exit(1)
 
     bank_type = sys.argv[1]
     pdf_file = sys.argv[2]
     firefly_url = sys.argv[3]
     access_token = sys.argv[4]
+    detect_duplicates = sys.argv[5] == '1' if len(sys.argv) > 5 else True
+    detect_transfers = sys.argv[6] == '1' if len(sys.argv) > 6 else True
 
     print(f"Processing {bank_type} statement: {pdf_file}")
-    result = process_pdf_and_import(pdf_file, bank_type, firefly_url, access_token)
+    print(f"Detect duplicates: {detect_duplicates}")
+    print(f"Detect transfers: {detect_transfers}")
+
+    result = process_pdf_and_import(pdf_file, bank_type, firefly_url, access_token, detect_duplicates, detect_transfers)
 
     print("\n" + "="*60)
     print("IMPORT RESULTS")

@@ -19,6 +19,17 @@ class Transaction:
     category: Optional[str] = None
     account: str = ""
     transaction_type: str = ""  # debit/credit/transfer
+    transaction_id: Optional[str] = None  # Unique identifier
+
+    def __post_init__(self):
+        if self.transaction_id is None:
+            self.transaction_id = self._generate_id()
+
+    def _generate_id(self) -> str:
+        """Generate unique ID based on transaction details"""
+        import hashlib
+        data = f"{self.date}_{self.description}_{abs(self.amount)}_{self.account}"
+        return hashlib.md5(data.encode()).hexdigest()[:16]
 
     def to_dict(self):
         return asdict(self)
@@ -31,51 +42,87 @@ class AmexParser:
         transactions = []
 
         with pdfplumber.open(pdf_path) as pdf:
-            for page_num in [2, 3]:  # Transaction pages
-                if page_num >= len(pdf.pages):
-                    continue
+            # Extract year from statement date on first page
+            year = '2025'
+            first_page_text = pdf.pages[0].extract_text()
+            if first_page_text:
+                # Look for "Date\nMonth DD, YYYY" pattern
+                year_match = re.search(r'Date\s+\w+\s+\d{1,2},\s+(\d{4})', first_page_text)
+                if year_match:
+                    year = year_match.group(1)
 
+            # Process all pages starting from page 2 (index 2)
+            for page_num in range(2, len(pdf.pages)):
                 page = pdf.pages[page_num]
                 text = page.extract_text()
 
-                # Parse transaction lines
+                if not text:
+                    continue
+
                 lines = text.split('\n')
-                for i, line in enumerate(lines):
-                    # Match date pattern: DD MMM or DD/MM/YYYY
-                    date_match = re.match(r'(\d{2}\s+\w{3}|\d{2}/\d{2}/\d{4})', line)
+                i = 0
+
+                while i < len(lines):
+                    line = lines[i].strip()
+
+                    # Skip empty lines and section headers
+                    if not line or 'TRANSACTION DETAILS' in line or 'Card Number' in line:
+                        i += 1
+                        continue
+
+                    # Match transaction line: "MonthDay DESCRIPTION AMOUNT"
+                    # Date format: "February22", "March1", etc. (no space between month and day!)
+                    date_match = re.match(r'^([A-Z][a-z]+)(\d{1,2})\s+(.+)$', line)
+
                     if date_match:
-                        parts = line.split()
-                        if len(parts) >= 2:
-                            date_str = parts[0] + ' ' + parts[1] if ' ' in date_match.group() else parts[0]
+                        month_str = date_match.group(1)
+                        day_str = date_match.group(2)
+                        rest_of_line = date_match.group(3).strip()
 
-                            # Extract description and amount
-                            amount_match = re.search(r'(\d+\.\d{2})', line)
-                            if amount_match:
-                                amount = float(amount_match.group(1))
-                                desc_end = line.rfind(amount_match.group(1))
-                                description = line[len(date_str):desc_end].strip()
+                        # Extract amount from end of line
+                        amount_match = re.search(r'([\d,]+\.\d{2})$', rest_of_line)
 
-                                # Determine if credit or debit
-                                is_credit = 'CR' in line or 'Payment' in description or 'Cashback' in description
-                                amount = amount if is_credit else -amount
+                        if amount_match:
+                            amount_str = amount_match.group(1).replace(',', '')
+                            amount = float(amount_str)
 
-                                # Parse date
-                                try:
-                                    if '/' in date_str:
-                                        date_obj = datetime.strptime(date_str, '%d/%m/%Y')
-                                    else:
-                                        # Assume current/previous year
-                                        date_obj = datetime.strptime(date_str + ' 2025', '%d %b %Y')
+                            # Description is everything before the amount
+                            description = rest_of_line[:amount_match.start()].strip()
 
-                                    transactions.append(Transaction(
-                                        date=date_obj.strftime('%Y-%m-%d'),
-                                        description=description,
-                                        amount=amount,
-                                        account='AMEX',
-                                        transaction_type='credit' if is_credit else 'debit'
-                                    ))
-                                except ValueError:
-                                    continue
+                            # Check if next line has "CR" (for credits) or foreign currency info
+                            is_credit = False
+                            if i + 1 < len(lines):
+                                next_line = lines[i + 1].strip()
+                                if next_line == 'CR' or 'PAYMENT RECEIVED' in description.upper() or 'CASHBACK' in description.upper():
+                                    is_credit = True
+
+                                # Skip foreign currency lines
+                                if 'DOLLAR' in next_line or 'RUPEE' in next_line or 'EURO' in next_line:
+                                    i += 1
+                                    if i + 1 < len(lines) and 'includes conversion commission' in lines[i + 1]:
+                                        i += 1
+
+                            # Make debits negative
+                            if not is_credit:
+                                amount = -amount
+
+                            # Parse date
+                            try:
+                                # Construct date string "DD Month YYYY"
+                                date_str = f"{day_str} {month_str} {year}"
+                                date_obj = datetime.strptime(date_str, '%d %B %Y')
+
+                                transactions.append(Transaction(
+                                    date=date_obj.strftime('%Y-%m-%d'),
+                                    description=description,
+                                    amount=amount,
+                                    account='AMEX',
+                                    transaction_type='credit' if is_credit else 'debit'
+                                ))
+                            except ValueError as e:
+                                pass
+
+                    i += 1
 
         return transactions
 
@@ -236,44 +283,347 @@ class CommBankParser:
         transactions = []
 
         with pdfplumber.open(pdf_path) as pdf:
-            for page_num in [1, 2]:  # Transaction pages
-                if page_num >= len(pdf.pages):
-                    continue
-
+            # CommBank statements have transactions on pages 2-3 (indices 1-2)
+            for page_num in range(len(pdf.pages)):
                 page = pdf.pages[page_num]
                 text = page.extract_text()
+
+                if not text:
+                    continue
+
                 lines = text.split('\n')
 
+                # Look for transaction section
+                in_transactions = False
                 for line in lines:
-                    # Match date pattern DD MMM
-                    date_match = re.match(r'(\d{2}\s+\w{3})', line)
+                    # Start parsing when we see "Date" and "Transaction details"
+                    if 'Date' in line and 'Transaction details' in line:
+                        in_transactions = True
+                        continue
+
+                    # Stop at certain markers
+                    if any(marker in line for marker in ['Interest charged', 'Please check your transactions']):
+                        in_transactions = False
+                        continue
+
+                    if not in_transactions:
+                        continue
+
+                    # Match date pattern: DD MMM
+                    date_match = re.match(r'^(\d{2}\s+\w{3})\s+(.+)', line)
                     if date_match:
                         date_str = date_match.group(1)
+                        rest_of_line = date_match.group(2).strip()
 
-                        # Extract amount (last number on line)
-                        amount_match = re.search(r'(\d+\.\d{2})(?:\s|$)', line)
+                        # Find amount at end of line
+                        # Format can be: "123.45" or "123.45-" (for credits)
+                        amount_match = re.search(r'(\d+\.\d{2})(-?)\s*$', rest_of_line)
+
                         if amount_match:
                             amount = float(amount_match.group(1))
+                            has_minus = amount_match.group(2) == '-'
 
-                            # Description is between date and amount
-                            desc_start = len(date_str)
-                            desc_end = line.rfind(amount_match.group(1))
-                            description = line[desc_start:desc_end].strip()
+                            # Extract description (everything before the amount)
+                            desc_end = rest_of_line.rfind(amount_match.group(0))
+                            description = rest_of_line[:desc_end].strip()
 
-                            # Check if it's a credit (payment/refund)
-                            is_credit = 'Payment' in line or 'Refund' in line or line.endswith('-')
-                            amount = amount if is_credit else -amount
+                            # Determine if it's a credit or debit
+                            # Credits have minus sign after amount or contain "Payment" or "Thank You"
+                            is_credit = has_minus or 'Payment' in description or 'Thank You' in description or 'Refund' in description
 
-                            # Parse date (assume 2025)
-                            date_obj = datetime.strptime(date_str + ' 2025', '%d %b %Y')
+                            # For credits, amount stays positive; for debits, make negative
+                            if not is_credit:
+                                amount = -amount
+
+                            # Parse date - determine year from statement
+                            # Try to extract year from statement period
+                            year = '2025'  # Default
+                            for check_line in lines:
+                                year_match = re.search(r'(\d{2}\s+\w{3}\s+(\d{4}))', check_line)
+                                if year_match:
+                                    year = year_match.group(2)
+                                    break
+
+                            try:
+                                date_obj = datetime.strptime(f"{date_str} {year}", '%d %b %Y')
+
+                                transactions.append(Transaction(
+                                    date=date_obj.strftime('%Y-%m-%d'),
+                                    description=description,
+                                    amount=amount,
+                                    account='CommBank Diamond',
+                                    transaction_type='credit' if is_credit else 'debit'
+                                ))
+                            except ValueError:
+                                # Skip if date parsing fails
+                                continue
+
+        return transactions
+
+
+class CommBankHomeLoanParser:
+    """Parser for Commonwealth Bank Home Loan statements"""
+
+    def parse(self, pdf_path: str) -> List[Transaction]:
+        transactions = []
+
+        with pdfplumber.open(pdf_path) as pdf:
+            # Extract year from first page
+            year = '2025'
+            first_page_text = pdf.pages[0].extract_text()
+            if first_page_text:
+                # Look for statement period with year
+                year_match = re.search(r'(\d{1,2}\s+\w+\s+(\d{4}))', first_page_text)
+                if year_match:
+                    year = year_match.group(2)
+
+            # Start from page 2 (index 1) where transactions usually are
+            for page_num in range(1, len(pdf.pages)):
+                page = pdf.pages[page_num]
+
+                # Try table extraction first
+                tables = page.extract_tables()
+
+                for table in tables:
+                    if not table:
+                        continue
+
+                    # Find header row
+                    header_idx = -1
+                    for idx, row in enumerate(table):
+                        if row and 'Date' in str(row[0]) and 'Transaction' in str(row):
+                            header_idx = idx
+                            break
+
+                    if header_idx == -1:
+                        continue
+
+                    # Process data rows
+                    for row in table[header_idx + 1:]:
+                        if not row or len(row) < 4:
+                            continue
+
+                        date_str = str(row[0]).strip() if row[0] else ''
+                        description = str(row[1]).strip() if row[1] else ''
+                        debit_str = str(row[2]).strip() if len(row) > 2 and row[2] else ''
+                        credit_str = str(row[3]).strip() if len(row) > 3 and row[3] else ''
+
+                        # Skip if date is not valid or is header
+                        if not date_str or date_str == 'Date' or date_str.lower() in ['opening balance', 'closing balance']:
+                            continue
+
+                        # Parse date - format is "DD MMM"
+                        date_match = re.match(r'(\d{1,2}\s+\w{3})', date_str)
+                        if not date_match:
+                            continue
+
+                        # Parse amount
+                        amount = 0.0
+                        is_credit = False
+
+                        if credit_str and credit_str not in ['', 'Credits', 'Credit']:
+                            try:
+                                # Remove $ and commas
+                                amount = float(credit_str.replace('$', '').replace(',', '').replace('(', '').replace(')', ''))
+                                is_credit = True
+                            except:
+                                continue
+                        elif debit_str and debit_str not in ['', 'Debits', 'Debit']:
+                            try:
+                                amount = float(debit_str.replace('$', '').replace(',', '').replace('(', '').replace(')', ''))
+                                is_credit = False
+                            except:
+                                continue
+
+                        if amount == 0.0:
+                            continue
+
+                        # For debits, make negative
+                        if not is_credit:
+                            amount = -amount
+
+                        # Parse date with year
+                        try:
+                            date_obj = datetime.strptime(f"{date_str} {year}", '%d %b %Y')
+
+                            # Clean description
+                            clean_desc = description.strip()
 
                             transactions.append(Transaction(
                                 date=date_obj.strftime('%Y-%m-%d'),
-                                description=description,
+                                description=clean_desc,
                                 amount=amount,
-                                account='CommBank Diamond',
+                                account='CommBank Home Loan',
                                 transaction_type='credit' if is_credit else 'debit'
                             ))
+                        except ValueError:
+                            continue
+
+        return transactions
+
+
+class CommBankEverydayOffsetParser:
+    """Parser for Commonwealth Bank Everyday Offset account statements"""
+
+    def parse(self, pdf_path: str) -> List[Transaction]:
+        transactions = []
+
+        with pdfplumber.open(pdf_path) as pdf:
+            # Extract year from first page
+            year = '2025'
+            first_page_text = pdf.pages[0].extract_text()
+            if first_page_text:
+                # Look for statement period with year - use "Period" or "OPENING BALANCE" line
+                year_match = re.search(r'(?:Period|OPENING BALANCE).*?(\d{1,2}\s+\w+\s+(\d{4}))', first_page_text)
+                if year_match:
+                    year = year_match.group(2)
+                else:
+                    # Fallback: look for any 4-digit year 2020-2099
+                    year_match = re.search(r'\b(20\d{2})\b', first_page_text)
+                    if year_match:
+                        year = year_match.group(1)
+
+            for page_num in range(len(pdf.pages)):
+                page = pdf.pages[page_num]
+                text = page.extract_text()
+
+                if not text:
+                    continue
+
+                lines = text.split('\n')
+
+                # Find the header line
+                header_idx = -1
+                for idx, line in enumerate(lines):
+                    if 'Date' in line and 'Transaction' in line and 'Balance' in line:
+                        header_idx = idx
+                        break
+
+                if header_idx == -1:
+                    continue
+
+                # Process transaction lines after header
+                i = header_idx + 1
+                while i < len(lines):
+                    line = lines[i].strip()
+
+                    # Skip empty lines
+                    if not line:
+                        i += 1
+                        continue
+
+                    # Skip OPENING BALANCE and CLOSING BALANCE
+                    if 'OPENING BALANCE' in line or 'CLOSING BALANCE' in line:
+                        i += 1
+                        continue
+
+                    # Match transaction line starting with date: "DD MMM" or "DD MMM YYYY"
+                    date_match = re.match(r'^(\d{1,2}\s+\w{3}(?:\s+\d{4})?)\s+(.+)$', line)
+
+                    if not date_match:
+                        i += 1
+                        continue
+
+                    date_str = date_match.group(1).strip()
+                    rest_of_line = date_match.group(2).strip()
+
+                    # Collect description and amount from this and following lines
+                    # Format: "DD MMM Description... Amount Balance"
+                    # Description can span multiple lines
+                    description_parts = []
+                    amount_str = None
+
+                    # Parse rest of current line
+                    # Look for amounts at the end: pattern like "450.00 $" or "$450.00" or "450.00 (" for debits
+                    amount_pattern = r'(?:(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s*\(?\s*\$?\s*(?:\$?([\d,]+\.\d{2})CR)?)\s*$'
+
+                    # Try to find amount on current line
+                    amount_match = re.search(r'([\d,]+\.\d{2})\s*\(?\s*\$', rest_of_line)
+                    if amount_match:
+                        amount_str = amount_match.group(1)
+                        # Everything before the amount is description
+                        description_parts.append(rest_of_line[:amount_match.start()].strip())
+                    else:
+                        # No amount on this line, description continues
+                        description_parts.append(rest_of_line)
+
+                        # Check next lines for continuation
+                        j = i + 1
+                        while j < len(lines) and amount_str is None:
+                            next_line = lines[j].strip()
+
+                            # If next line starts with a date, we've gone too far
+                            if re.match(r'^\d{1,2}\s+\w{3}', next_line):
+                                break
+
+                            # Check if this line has an amount
+                            amount_match = re.search(r'([\d,]+\.\d{2})\s*\(?\s*\$', next_line)
+                            if amount_match:
+                                amount_str = amount_match.group(1)
+                                # Add description part before amount
+                                desc_part = next_line[:amount_match.start()].strip()
+                                if desc_part:
+                                    description_parts.append(desc_part)
+                                i = j
+                                break
+                            else:
+                                # More description
+                                description_parts.append(next_line)
+                                i = j
+
+                            j += 1
+
+                    if not amount_str:
+                        # Couldn't find amount, skip this transaction
+                        i += 1
+                        continue
+
+                    # Determine if debit or credit
+                    # Debits have "(" after amount, credits don't
+                    is_debit = '(' in rest_of_line or (i < len(lines) and '(' in lines[i])
+
+                    # Parse amount
+                    try:
+                        amount = float(amount_str.replace(',', ''))
+                        if is_debit:
+                            amount = -amount
+                    except ValueError:
+                        i += 1
+                        continue
+
+                    # Skip zero amounts
+                    if abs(amount) < 0.01:
+                        i += 1
+                        continue
+
+                    # Join description parts
+                    description = ' '.join(description_parts).strip()
+
+                    # Clean up description: remove trailing $ and whitespace
+                    description = re.sub(r'\s*\$\s*$', '', description).strip()
+
+                    if not description:
+                        i += 1
+                        continue
+
+                    # Parse date
+                    try:
+                        if len(date_str.split()) == 3:
+                            date_obj = datetime.strptime(date_str, '%d %b %Y')
+                        else:
+                            date_obj = datetime.strptime(f"{date_str} {year}", '%d %b %Y')
+
+                        transactions.append(Transaction(
+                            date=date_obj.strftime('%Y-%m-%d'),
+                            description=description,
+                            amount=amount,
+                            account='CommBank Everyday Offset',
+                            transaction_type='credit' if amount > 0 else 'debit'
+                        ))
+                    except ValueError:
+                        pass
+
+                    i += 1
 
         return transactions
 
@@ -287,7 +637,9 @@ class StatementParser:
             'ing_orange': INGOrangeParser(),
             'ing_savings': INGSavingsParser(),
             'ubank': UBankParser(),
-            'commbank': CommBankParser()
+            'commbank': CommBankParser(),
+            'commbank_homeloan': CommBankHomeLoanParser(),
+            'commbank_offset': CommBankEverydayOffsetParser()
         }
 
     def parse_statement(self, pdf_path: str, bank_type: str) -> List[Transaction]:

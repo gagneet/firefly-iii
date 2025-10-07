@@ -195,7 +195,9 @@
           <li><strong>ING Orange Everyday:</strong> Transaction account statements</li>
           <li><strong>ING Savings Maximiser:</strong> Savings account statements</li>
           <li><strong>uBank Spend:</strong> Transaction account statements</li>
-          <li><strong>Commonwealth Bank:</strong> Account statements</li>
+          <li><strong>Commonwealth Bank (Credit Card):</strong> Credit card statements</li>
+          <li><strong>Commonwealth Bank (Home Loan):</strong> Home loan statements</li>
+          <li><strong>Commonwealth Bank (Everyday Offset):</strong> Everyday Offset account statements</li>
         </ul>
 
         <h4>How It Works</h4>
