@@ -183,36 +183,122 @@ class INGSavingsParser:
                 text = page.extract_text()
                 lines = text.split('\n')
 
+                # Find transaction section: "Date Details Money out $ Money in $ Balance $"
                 in_transactions = False
-                for line in lines:
-                    if 'Date' in line and 'Description' in line:
+                i = 0
+
+                while i < len(lines):
+                    line = lines[i].strip()
+
+                    # Look for header with "Date Details"
+                    if 'Date' in line and 'Details' in line and 'Money' in line:
                         in_transactions = True
+                        i += 1
                         continue
 
-                    if in_transactions and 'Closing Balance' in line:
-                        break
+                    # Stop at page footer or next section
+                    if 'Page' in line and 'of' in line:
+                        in_transactions = False
 
                     if in_transactions:
-                        # Match date pattern DD MMM YYYY
-                        date_match = re.match(r'(\d{2}\s+\w{3}\s+\d{4})', line)
+                        # Match date pattern: DD/MM/YYYY
+                        date_match = re.match(r'^(\d{1,2}/\d{1,2}/\d{4})\s+(.+)$', line)
+
                         if date_match:
                             date_str = date_match.group(1)
+                            rest_of_line = date_match.group(2).strip()
 
-                            # Extract description and amounts
-                            parts = re.split(r'\s{2,}', line)
-                            if len(parts) >= 3:
-                                description = parts[1] if len(parts) > 1 else ''
+                            # Collect description from this line and possibly next lines
+                            description_parts = []
 
-                                # Get deposit and withdrawal
-                                amounts = re.findall(r'-?\$?(\d+,?\d*\.\d{2})', line)
-                                if amounts:
-                                    # Check if withdrawal or deposit
-                                    if 'Withdrawal' in line or line.count('(') >= 2:
-                                        amount = -float(amounts[1].replace(',', '')) if len(amounts) > 1 else float(amounts[0].replace(',', ''))
+                            # Extract amounts from end of line: Money out, Money in, Balance
+                            # Pattern: "Description [amount] [amount] amount"
+                            amount_pattern = r'([\d,]+\.\d{2})'
+                            amounts = re.findall(amount_pattern, rest_of_line)
+
+                            if len(amounts) >= 3:
+                                # Has money out, money in, and balance
+                                # Format: ... money_out money_in balance
+                                first_amount_pos = rest_of_line.find(amounts[0])
+                                description_parts.append(rest_of_line[:first_amount_pos].strip())
+                                money_out = amounts[0]
+                                money_in = amounts[1]
+                            elif len(amounts) == 2:
+                                # Has money in and balance (no money out)
+                                # Format: ... money_in balance
+                                first_amount_pos = rest_of_line.find(amounts[0])
+                                description_parts.append(rest_of_line[:first_amount_pos].strip())
+                                money_out = None
+                                money_in = amounts[0]
+
+                            elif len(amounts) == 1:
+                                # Only balance shown - look at previous line for details
+                                first_amount_pos = rest_of_line.find(amounts[0])
+                                description_parts.append(rest_of_line[:first_amount_pos].strip())
+                                money_out = None
+                                money_in = amounts[0]
+                            else:
+                                # No amounts on this line, description continues
+                                description_parts.append(rest_of_line)
+                                money_out = None
+                                money_in = None
+
+                            # Check next lines for continuation (lines without dates)
+                            j = i + 1
+                            while j < len(lines) and money_out is None and money_in is None:
+                                next_line = lines[j].strip()
+
+                                # If next line starts with a date, stop
+                                if re.match(r'^\d{1,2}/\d{1,2}/\d{4}', next_line):
+                                    break
+
+                                # If next line has amounts
+                                amounts = re.findall(amount_pattern, next_line)
+                                if len(amounts) >= 1:
+                                    # Extract amounts
+                                    if len(amounts) == 3:
+                                        # money_out, money_in, balance
+                                        money_out = amounts[0] if amounts[0] else None
+                                        money_in = amounts[1]
+                                        # Balance is amounts[2]
+                                    elif len(amounts) == 2:
+                                        # money_in, balance
+                                        money_out = None
+                                        money_in = amounts[0]
                                     else:
-                                        amount = float(amounts[0].replace(',', ''))
+                                        money_in = amounts[0]
 
-                                    date_obj = datetime.strptime(date_str, '%d %b %Y')
+                                    # Description is before amounts
+                                    first_amount_pos = next_line.find(amounts[0])
+                                    desc_part = next_line[:first_amount_pos].strip()
+                                    if desc_part:
+                                        description_parts.append(desc_part)
+                                    break
+                                else:
+                                    # More description
+                                    description_parts.append(next_line)
+
+                                j += 1
+                                i = j
+
+                            # Create transaction
+                            if money_in or money_out:
+                                description = ' '.join(description_parts).strip()
+
+                                # Clean description: remove "Receipt XXXXXX"
+                                description = re.sub(r'-\s*Receipt\s+\d+', '', description).strip()
+
+                                # Determine amount
+                                if money_out and money_out != '0.00':
+                                    amount = -float(money_out.replace(',', ''))
+                                elif money_in:
+                                    amount = float(money_in.replace(',', ''))
+                                else:
+                                    i += 1
+                                    continue
+
+                                try:
+                                    date_obj = datetime.strptime(date_str, '%d/%m/%Y')
 
                                     transactions.append(Transaction(
                                         date=date_obj.strftime('%Y-%m-%d'),
@@ -221,6 +307,10 @@ class INGSavingsParser:
                                         account='ING Savings Maximiser',
                                         transaction_type='credit' if amount > 0 else 'debit'
                                     ))
+                                except ValueError:
+                                    pass
+
+                    i += 1
 
         return transactions
 
@@ -369,95 +459,93 @@ class CommBankHomeLoanParser:
 
         with pdfplumber.open(pdf_path) as pdf:
             # Extract year from first page
-            year = '2025'
+            year = '2020'
             first_page_text = pdf.pages[0].extract_text()
             if first_page_text:
                 # Look for statement period with year
-                year_match = re.search(r'(\d{1,2}\s+\w+\s+(\d{4}))', first_page_text)
+                year_match = re.search(r'Statement period.*?(\d{4})', first_page_text)
                 if year_match:
-                    year = year_match.group(2)
+                    year = year_match.group(1)
 
-            # Start from page 2 (index 1) where transactions usually are
-            for page_num in range(1, len(pdf.pages)):
+            # Process all pages
+            for page_num in range(len(pdf.pages)):
                 page = pdf.pages[page_num]
+                text = page.extract_text()
 
-                # Try table extraction first
-                tables = page.extract_tables()
+                if not text:
+                    continue
 
-                for table in tables:
-                    if not table:
+                lines = text.split('\n')
+
+                # Find transaction section
+                in_transactions = False
+                i = 0
+
+                while i < len(lines):
+                    line = lines[i].strip()
+
+                    # Look for transaction header: "Date Transaction description Debits Credits Balance"
+                    if 'Date' in line and 'Transaction' in line and ('Debit' in line or 'Credit' in line) and 'Balance' in line:
+                        in_transactions = True
+                        i += 1
                         continue
 
-                    # Find header row
-                    header_idx = -1
-                    for idx, row in enumerate(table):
-                        if row and 'Date' in str(row[0]) and 'Transaction' in str(row):
-                            header_idx = idx
-                            break
-
-                    if header_idx == -1:
+                    # Skip interest rate lines and stop markers
+                    if in_transactions and ('Interest rate' in line or 'Page' in line):
+                        i += 1
                         continue
 
-                    # Process data rows
-                    for row in table[header_idx + 1:]:
-                        if not row or len(row) < 4:
-                            continue
+                    # Stop at closing balance
+                    if 'Closing balance' in line:
+                        in_transactions = False
 
-                        date_str = str(row[0]).strip() if row[0] else ''
-                        description = str(row[1]).strip() if row[1] else ''
-                        debit_str = str(row[2]).strip() if len(row) > 2 and row[2] else ''
-                        credit_str = str(row[3]).strip() if len(row) > 3 and row[3] else ''
+                    if in_transactions:
+                        # Match transaction line: "DD MMM Description..."
+                        date_match = re.match(r'^(\d{1,2}\s+\w{3})\s+(.+)$', line)
 
-                        # Skip if date is not valid or is header
-                        if not date_str or date_str == 'Date' or date_str.lower() in ['opening balance', 'closing balance']:
-                            continue
+                        if date_match:
+                            date_str = date_match.group(1)
+                            rest_of_line = date_match.group(2).strip()
 
-                        # Parse date - format is "DD MMM"
-                        date_match = re.match(r'(\d{1,2}\s+\w{3})', date_str)
-                        if not date_match:
-                            continue
-
-                        # Parse amount
-                        amount = 0.0
-                        is_credit = False
-
-                        if credit_str and credit_str not in ['', 'Credits', 'Credit']:
-                            try:
-                                # Remove $ and commas
-                                amount = float(credit_str.replace('$', '').replace(',', '').replace('(', '').replace(')', ''))
-                                is_credit = True
-                            except:
-                                continue
-                        elif debit_str and debit_str not in ['', 'Debits', 'Debit']:
-                            try:
-                                amount = float(debit_str.replace('$', '').replace(',', '').replace('(', '').replace(')', ''))
-                                is_credit = False
-                            except:
+                            # Skip opening balance
+                            if 'Opening balance' in rest_of_line:
+                                i += 1
                                 continue
 
-                        if amount == 0.0:
-                            continue
+                            # Look for amounts: pattern is "Description -amount $balance" or "Description amount $balance"
+                            # Debits have minus sign before amount
+                            amount_match = re.search(r'(-?[\d,]+\.\d{2})\s+\$[\d,]+\.\d{2}\s+DR', rest_of_line)
 
-                        # For debits, make negative
-                        if not is_credit:
-                            amount = -amount
+                            if amount_match:
+                                amount_str = amount_match.group(1).replace(',', '')
+                                amount = float(amount_str)
 
-                        # Parse date with year
-                        try:
-                            date_obj = datetime.strptime(f"{date_str} {year}", '%d %b %Y')
+                                # Description is everything before the amount
+                                description = rest_of_line[:amount_match.start()].strip()
 
-                            # Clean description
-                            clean_desc = description.strip()
+                                # Clean up description
+                                description = re.sub(r'\s+', ' ', description)
 
-                            transactions.append(Transaction(
-                                date=date_obj.strftime('%Y-%m-%d'),
-                                description=clean_desc,
-                                amount=amount,
-                                account='CommBank Home Loan',
-                                transaction_type='credit' if is_credit else 'debit'
-                            ))
-                        except ValueError:
-                            continue
+                                # Skip if no description or amount is 0
+                                if not description or abs(amount) < 0.01:
+                                    i += 1
+                                    continue
+
+                                # Parse date
+                                try:
+                                    date_obj = datetime.strptime(f"{date_str} {year}", '%d %b %Y')
+
+                                    transactions.append(Transaction(
+                                        date=date_obj.strftime('%Y-%m-%d'),
+                                        description=description,
+                                        amount=amount,
+                                        account='CommBank Home Loan',
+                                        transaction_type='credit' if amount > 0 else 'debit'
+                                    ))
+                                except ValueError:
+                                    pass
+
+                    i += 1
 
         return transactions
 

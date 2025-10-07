@@ -80,7 +80,7 @@ class StatementImportController extends Controller
     public function upload(Request $request): JsonResponse
     {
         $request->validate([
-            'file' => 'required|file|mimes:pdf|max:10240', // Max 10MB
+            'file' => 'required|file|mimes:pdf|max:20480', // Max 20MB
             'bank_type' => 'required|string|in:amex,ing_orange,ing_savings,ubank,commbank,commbank_homeloan,commbank_offset',
             'detect_duplicates' => 'boolean',
             'detect_transfers' => 'boolean'

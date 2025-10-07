@@ -32,9 +32,26 @@
           </p>
         </div>
 
+        <!-- Bulk Mode Toggle -->
+        <div class="form-group">
+          <div class="checkbox">
+            <label>
+              <input
+                type="checkbox"
+                v-model="bulkMode"
+                :disabled="importing"
+              />
+              <strong>Bulk Import Mode</strong> (upload multiple PDF files at once)
+            </label>
+          </div>
+        </div>
+
         <!-- File Upload -->
         <div class="form-group">
-          <label for="file-upload">PDF Statement</label>
+          <label for="file-upload">
+            <span v-if="!bulkMode">PDF Statement</span>
+            <span v-else>PDF Statements (Multiple Files)</span>
+          </label>
           <input
             id="file-upload"
             type="file"
@@ -42,10 +59,14 @@
             @change="onFileChange"
             class="form-control"
             :disabled="!selectedBank || importing"
+            :multiple="bulkMode"
             ref="fileInput"
           />
-          <p class="help-block">
-            Maximum file size: 10MB. Only PDF files are accepted.
+          <p class="help-block" v-if="!bulkMode">
+            Maximum file size: 20MB per file. Only PDF files are accepted.
+          </p>
+          <p class="help-block" v-else>
+            Maximum file size: 20MB per file. You can select multiple PDF files from the same bank.
           </p>
         </div>
 
@@ -74,14 +95,25 @@
           </div>
         </div>
 
-        <!-- File Info -->
-        <div v-if="file" class="alert alert-info">
+        <!-- File Info - Single Mode -->
+        <div v-if="file && !bulkMode" class="alert alert-info">
           <strong>Selected file:</strong> {{ file.name }}
           ({{ formatFileSize(file.size) }})
         </div>
 
-        <!-- Progress -->
-        <div v-if="importing" class="progress">
+        <!-- File Info - Bulk Mode -->
+        <div v-if="files.length > 0 && bulkMode" class="alert alert-info">
+          <strong>Selected files:</strong> {{ files.length }} PDF(s)
+          <ul class="file-list">
+            <li v-for="(f, index) in files" :key="index">
+              {{ f.name }} ({{ formatFileSize(f.size) }})
+            </li>
+          </ul>
+          <p><strong>Total size:</strong> {{ formatFileSize(totalFileSize) }}</p>
+        </div>
+
+        <!-- Progress - Single Mode -->
+        <div v-if="importing && !bulkMode" class="progress">
           <div
             class="progress-bar progress-bar-striped active"
             role="progressbar"
@@ -91,8 +123,59 @@
           </div>
         </div>
 
-        <!-- Results -->
-        <div v-if="importResult" class="alert" :class="resultAlertClass">
+        <!-- Progress - Bulk Mode -->
+        <div v-if="importing && bulkMode" class="bulk-progress">
+          <div class="alert alert-info">
+            <h4>
+              <i class="fa fa-spinner fa-spin"></i>
+              Processing {{ currentFileIndex }} of {{ files.length }} files...
+            </h4>
+            <p v-if="currentFileName">
+              <strong>Current file:</strong> {{ currentFileName }}
+            </p>
+          </div>
+
+          <div class="progress">
+            <div
+              class="progress-bar progress-bar-striped active"
+              role="progressbar"
+              :style="{ width: bulkProgressPercent + '%' }"
+            >
+              <span>{{ bulkProgressPercent }}%</span>
+            </div>
+          </div>
+
+          <!-- Per-file results -->
+          <div v-if="bulkResults.length > 0" class="bulk-results">
+            <h5>Completed Files:</h5>
+            <table class="table table-condensed table-striped">
+              <thead>
+                <tr>
+                  <th>File</th>
+                  <th>Status</th>
+                  <th>Transactions</th>
+                  <th>Created</th>
+                  <th>Duplicates</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(result, index) in bulkResults" :key="index" :class="result.success ? '' : 'danger'">
+                  <td>{{ result.filename }}</td>
+                  <td>
+                    <i class="fa" :class="result.success ? 'fa-check text-success' : 'fa-times text-danger'"></i>
+                    {{ result.success ? 'Success' : 'Failed' }}
+                  </td>
+                  <td>{{ result.data ? result.data.total : 0 }}</td>
+                  <td>{{ result.data ? result.data.created : 0 }}</td>
+                  <td>{{ result.data ? result.data.duplicates : 0 }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Results - Single Mode -->
+        <div v-if="importResult && !bulkMode" class="alert" :class="resultAlertClass">
           <h4>
             <i class="fa" :class="resultIconClass"></i>
             {{ importResult.message }}
@@ -142,6 +225,46 @@
                 Download the processed transactions as a CSV file for your records
               </p>
             </div>
+          </div>
+        </div>
+
+        <!-- Results - Bulk Mode Summary -->
+        <div v-if="bulkComplete && bulkMode" class="alert alert-success">
+          <h4>
+            <i class="fa fa-check-circle"></i>
+            Bulk Import Complete!
+          </h4>
+          <div class="import-stats">
+            <table class="table table-condensed">
+              <tr>
+                <td><strong>Total files processed:</strong></td>
+                <td>{{ bulkSummary.filesProcessed }} / {{ bulkSummary.totalFiles }}</td>
+              </tr>
+              <tr class="success">
+                <td><strong>Successful imports:</strong></td>
+                <td>{{ bulkSummary.successCount }}</td>
+              </tr>
+              <tr v-if="bulkSummary.failedCount > 0" class="danger">
+                <td><strong>Failed imports:</strong></td>
+                <td>{{ bulkSummary.failedCount }}</td>
+              </tr>
+              <tr>
+                <td><strong>Total transactions found:</strong></td>
+                <td>{{ bulkSummary.totalTransactions }}</td>
+              </tr>
+              <tr class="success">
+                <td><strong>Transactions imported:</strong></td>
+                <td>{{ bulkSummary.totalCreated }}</td>
+              </tr>
+              <tr class="warning">
+                <td><strong>Duplicates skipped:</strong></td>
+                <td>{{ bulkSummary.totalDuplicates }}</td>
+              </tr>
+              <tr v-if="bulkSummary.totalTransfers > 0" class="info">
+                <td><strong>Transfers detected:</strong></td>
+                <td>{{ bulkSummary.totalTransfers }}</td>
+              </tr>
+            </table>
           </div>
         </div>
 
@@ -248,11 +371,28 @@ export default {
       banks: [],
       selectedBank: '',
       file: null,
+      files: [],
+      bulkMode: false,
       detectDuplicates: true,
       detectTransfers: true,
       importing: false,
       importResult: null,
-      errorMessage: null
+      errorMessage: null,
+      // Bulk mode data
+      currentFileIndex: 0,
+      currentFileName: '',
+      bulkResults: [],
+      bulkComplete: false,
+      bulkSummary: {
+        totalFiles: 0,
+        filesProcessed: 0,
+        successCount: 0,
+        failedCount: 0,
+        totalTransactions: 0,
+        totalCreated: 0,
+        totalDuplicates: 0,
+        totalTransfers: 0
+      }
     };
   },
 
@@ -262,7 +402,19 @@ export default {
     },
 
     canUpload() {
+      if (this.bulkMode) {
+        return this.selectedBank && this.files.length > 0 && !this.importing;
+      }
       return this.selectedBank && this.file && !this.importing;
+    },
+
+    totalFileSize() {
+      return this.files.reduce((sum, f) => sum + f.size, 0);
+    },
+
+    bulkProgressPercent() {
+      if (this.bulkSummary.totalFiles === 0) return 0;
+      return Math.round((this.bulkSummary.filesProcessed / this.bulkSummary.totalFiles) * 100);
     },
 
     resultAlertClass() {
@@ -326,31 +478,68 @@ export default {
     },
 
     onFileChange(event) {
-      const file = event.target.files[0];
-      if (file) {
-        // Validate file type
-        if (file.type !== 'application/pdf') {
-          this.errorMessage = 'Please select a PDF file';
-          this.$refs.fileInput.value = '';
-          return;
+      this.errorMessage = null;
+      this.importResult = null;
+      this.bulkResults = [];
+      this.bulkComplete = false;
+
+      if (this.bulkMode) {
+        // Handle multiple files
+        const selectedFiles = Array.from(event.target.files);
+
+        // Validate all files
+        const validFiles = [];
+        for (const file of selectedFiles) {
+          if (file.type !== 'application/pdf') {
+            this.errorMessage = `File "${file.name}" is not a PDF`;
+            this.$refs.fileInput.value = '';
+            return;
+          }
+          if (file.size > 20 * 1024 * 1024) {
+            this.errorMessage = `File "${file.name}" exceeds 20MB limit`;
+            this.$refs.fileInput.value = '';
+            return;
+          }
+          validFiles.push(file);
         }
 
-        // Validate file size (10MB)
-        if (file.size > 10 * 1024 * 1024) {
-          this.errorMessage = 'File size must be less than 10MB';
-          this.$refs.fileInput.value = '';
-          return;
-        }
+        this.files = validFiles;
+        this.file = null;
+      } else {
+        // Handle single file
+        const file = event.target.files[0];
+        if (file) {
+          // Validate file type
+          if (file.type !== 'application/pdf') {
+            this.errorMessage = 'Please select a PDF file';
+            this.$refs.fileInput.value = '';
+            return;
+          }
 
-        this.file = file;
-        this.errorMessage = null;
-        this.importResult = null;
+          // Validate file size (20MB)
+          if (file.size > 20 * 1024 * 1024) {
+            this.errorMessage = 'File size must be less than 20MB';
+            this.$refs.fileInput.value = '';
+            return;
+          }
+
+          this.file = file;
+          this.files = [];
+        }
       }
     },
 
     async uploadStatement() {
       if (!this.canUpload) return;
 
+      if (this.bulkMode) {
+        await this.uploadBulk();
+      } else {
+        await this.uploadSingle();
+      }
+    },
+
+    async uploadSingle() {
       this.importing = true;
       this.importResult = null;
       this.errorMessage = null;
@@ -386,6 +575,87 @@ export default {
       }
     },
 
+    async uploadBulk() {
+      this.importing = true;
+      this.importResult = null;
+      this.errorMessage = null;
+      this.bulkResults = [];
+      this.bulkComplete = false;
+
+      // Initialize summary
+      this.bulkSummary = {
+        totalFiles: this.files.length,
+        filesProcessed: 0,
+        successCount: 0,
+        failedCount: 0,
+        totalTransactions: 0,
+        totalCreated: 0,
+        totalDuplicates: 0,
+        totalTransfers: 0
+      };
+
+      // Process files sequentially
+      for (let i = 0; i < this.files.length; i++) {
+        this.currentFileIndex = i + 1;
+        this.currentFileName = this.files[i].name;
+
+        const formData = new FormData();
+        formData.append('file', this.files[i]);
+        formData.append('bank_type', this.selectedBank);
+        formData.append('detect_duplicates', this.detectDuplicates ? '1' : '0');
+        formData.append('detect_transfers', this.detectTransfers ? '1' : '0');
+
+        try {
+          const response = await axios.post('/api/v1/statement-import/upload', formData, {
+            headers: {
+              'Content-Type': 'multipart/form-data'
+            }
+          });
+
+          // Add result to bulk results
+          this.bulkResults.push({
+            filename: this.files[i].name,
+            success: response.data.success,
+            message: response.data.message,
+            data: response.data.data
+          });
+
+          // Update summary
+          this.bulkSummary.filesProcessed++;
+          if (response.data.success) {
+            this.bulkSummary.successCount++;
+            if (response.data.data) {
+              this.bulkSummary.totalTransactions += response.data.data.total || 0;
+              this.bulkSummary.totalCreated += response.data.data.created || 0;
+              this.bulkSummary.totalDuplicates += response.data.data.duplicates || 0;
+              this.bulkSummary.totalTransfers += response.data.data.transfers || 0;
+            }
+          } else {
+            this.bulkSummary.failedCount++;
+          }
+
+        } catch (error) {
+          console.error(`Upload error for ${this.files[i].name}:`, error);
+
+          // Add error result
+          this.bulkResults.push({
+            filename: this.files[i].name,
+            success: false,
+            message: error.response?.data?.message || 'Upload failed',
+            data: null
+          });
+
+          this.bulkSummary.filesProcessed++;
+          this.bulkSummary.failedCount++;
+        }
+      }
+
+      // Mark bulk import as complete
+      this.bulkComplete = true;
+      this.importing = false;
+      this.currentFileName = '';
+    },
+
     formatFileSize(bytes) {
       if (bytes === 0) return '0 Bytes';
       const k = 1024;
@@ -397,10 +667,25 @@ export default {
     reset() {
       this.selectedBank = '';
       this.file = null;
+      this.files = [];
       this.importResult = null;
       this.errorMessage = null;
       this.detectDuplicates = true;
       this.detectTransfers = true;
+      this.bulkResults = [];
+      this.bulkComplete = false;
+      this.currentFileIndex = 0;
+      this.currentFileName = '';
+      this.bulkSummary = {
+        totalFiles: 0,
+        filesProcessed: 0,
+        successCount: 0,
+        failedCount: 0,
+        totalTransactions: 0,
+        totalCreated: 0,
+        totalDuplicates: 0,
+        totalTransfers: 0
+      };
       if (this.$refs.fileInput) {
         this.$refs.fileInput.value = '';
       }
@@ -469,5 +754,38 @@ export default {
 
 .download-section .btn {
   margin-bottom: 10px;
+}
+
+/* Bulk upload styles */
+.file-list {
+  max-height: 200px;
+  overflow-y: auto;
+  margin: 10px 0;
+  padding-left: 20px;
+}
+
+.file-list li {
+  margin-bottom: 5px;
+}
+
+.bulk-progress {
+  margin-top: 20px;
+}
+
+.bulk-results {
+  margin-top: 15px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.bulk-results table {
+  font-size: 13px;
+}
+
+.bulk-results th {
+  position: sticky;
+  top: 0;
+  background: #f5f5f5;
+  z-index: 10;
 }
 </style>
