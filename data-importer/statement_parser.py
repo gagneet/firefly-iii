@@ -600,6 +600,15 @@ class CommBankEverydayOffsetParser:
                         i += 1
                         continue
 
+                    # Stop at summary sections
+                    if any(keyword in line for keyword in [
+                        'Opening balance - Total debits',
+                        'Transaction Summary',
+                        'Your Account Changes Summary',
+                        'Transaction Type'
+                    ]):
+                        break
+
                     # Skip OPENING BALANCE and CLOSING BALANCE
                     if 'OPENING BALANCE' in line or 'CLOSING BALANCE' in line:
                         i += 1
