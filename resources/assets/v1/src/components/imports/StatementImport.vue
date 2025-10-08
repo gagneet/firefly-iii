@@ -333,8 +333,47 @@
                   <td><i class="fa fa-exchange"></i> <strong>Transfers detected:</strong></td>
                   <td class="text-right"><strong>{{ bulkSummary.totalTransfers }}</strong></td>
                 </tr>
+                <tr v-if="bulkSummary.totalErrors > 0" class="danger">
+                  <td><i class="fa fa-exclamation-circle"></i> <strong>Transaction errors:</strong></td>
+                  <td class="text-right"><strong>{{ bulkSummary.totalErrors }}</strong></td>
+                </tr>
               </tbody>
             </table>
+
+            <!-- Error Details Section -->
+            <div v-if="filesWithErrors.length > 0" class="error-summary" style="margin-top: 20px;">
+              <h5 style="margin-top: 0; margin-bottom: 15px; color: #a94442;">
+                <i class="fa fa-exclamation-triangle"></i> Files with Errors ({{ filesWithErrors.length }})
+              </h5>
+              <div class="panel-group" id="error-accordion">
+                <div v-for="(fileError, index) in filesWithErrors" :key="index" class="panel panel-danger">
+                  <div class="panel-heading">
+                    <h4 class="panel-title">
+                      <a data-toggle="collapse" :data-parent="'#error-accordion'" :href="'#error-' + index">
+                        <i class="fa fa-file-pdf-o"></i>
+                        <strong>{{ fileError.filename }}</strong>
+                        <span class="badge badge-danger pull-right">{{ fileError.errorCount }} error(s)</span>
+                      </a>
+                    </h4>
+                  </div>
+                  <div :id="'error-' + index" class="panel-collapse collapse" :class="{ 'in': index === 0 }">
+                    <div class="panel-body">
+                      <p><strong>Status:</strong> {{ fileError.message }}</p>
+                      <p v-if="fileError.data">
+                        <strong>Transactions:</strong>
+                        {{ fileError.data.created }} created,
+                        {{ fileError.data.duplicates }} duplicates,
+                        <span class="text-danger">{{ fileError.data.errors }} errors</span>
+                      </p>
+                      <div v-if="fileError.debug_error" class="error-log">
+                        <strong>Error Log:</strong>
+                        <pre style="max-height: 200px; overflow-y: auto; background: #f5f5f5; padding: 10px; border-radius: 4px; font-size: 11px;">{{ fileError.debug_error }}</pre>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -461,7 +500,8 @@ export default {
         totalTransactions: 0,
         totalCreated: 0,
         totalDuplicates: 0,
-        totalTransfers: 0
+        totalTransfers: 0,
+        totalErrors: 0
       }
     };
   },
@@ -495,6 +535,36 @@ export default {
     resultIconClass() {
       if (!this.importResult) return '';
       return this.importResult.success ? 'fa-check-circle' : 'fa-exclamation-circle';
+    },
+
+    filesWithErrors() {
+      // Return array of files that had errors during import
+      return this.bulkResults.filter(result => {
+        // Include files that completely failed OR had transaction errors
+        if (!result.success) {
+          return true;
+        }
+        if (result.data && result.data.errors > 0) {
+          return true;
+        }
+        return false;
+      }).map(result => {
+        // Calculate error count
+        let errorCount = 0;
+        if (!result.success) {
+          errorCount = result.data ? (result.data.total || 0) : 1;
+        } else if (result.data) {
+          errorCount = result.data.errors || 0;
+        }
+
+        return {
+          filename: result.filename,
+          message: result.message,
+          data: result.data,
+          debug_error: result.debug_error,
+          errorCount: errorCount
+        };
+      });
     }
   },
 
@@ -661,7 +731,8 @@ export default {
         totalTransactions: 0,
         totalCreated: 0,
         totalDuplicates: 0,
-        totalTransfers: 0
+        totalTransfers: 0,
+        totalErrors: 0
       };
 
       // Process files sequentially
@@ -687,7 +758,8 @@ export default {
             filename: this.files[i].name,
             success: response.data.success,
             message: response.data.message,
-            data: response.data.data
+            data: response.data.data,
+            debug_error: response.data.debug_error || ''
           });
 
           // Update summary
@@ -699,6 +771,7 @@ export default {
               this.bulkSummary.totalCreated += response.data.data.created || 0;
               this.bulkSummary.totalDuplicates += response.data.data.duplicates || 0;
               this.bulkSummary.totalTransfers += response.data.data.transfers || 0;
+              this.bulkSummary.totalErrors += response.data.data.errors || 0;
             }
           } else {
             this.bulkSummary.failedCount++;
@@ -712,11 +785,17 @@ export default {
             filename: this.files[i].name,
             success: false,
             message: error.response?.data?.message || 'Upload failed',
-            data: null
+            data: error.response?.data?.data || null,
+            debug_error: error.response?.data?.debug_error || error.message
           });
 
           this.bulkSummary.filesProcessed++;
           this.bulkSummary.failedCount++;
+
+          // Count errors from failed file if available
+          if (error.response?.data?.data?.errors) {
+            this.bulkSummary.totalErrors += error.response.data.data.errors;
+          }
         }
       }
 

@@ -8,6 +8,7 @@ import requests
 import json
 import sys
 import logging
+import re
 from typing import List, Dict, Optional
 from statement_parser import Transaction, StatementParser
 from duplicate_detector import DuplicateDetector
@@ -15,6 +16,102 @@ from duplicate_detector import DuplicateDetector
 
 class FireflyService:
     """Service to interact with Firefly III API"""
+
+    @staticmethod
+    def normalize_merchant_name(description: str) -> str:
+        """
+        Normalize merchant/payee names to avoid creating duplicate expense/revenue accounts.
+
+        Examples:
+            "WOOLWORTHS 1234 BELCONNEN" -> "Woolworths"
+            "Salary SAI GLOBAL PAYRO 006064" -> "Salary"
+            "Direct Debit 000517 AMERICAN EXPRESS 376011940042008" -> "American Express"
+        """
+        # Remove common prefixes/suffixes
+        desc = description.strip()
+
+        # Remove card numbers and value dates
+        desc = re.sub(r'\bCard\s+xx\d+\b', '', desc, flags=re.IGNORECASE)
+        desc = re.sub(r'\bTap and Pay\s+xx\d+\b', '', desc, flags=re.IGNORECASE)
+        desc = re.sub(r'\bValue Date:.*$', '', desc, flags=re.IGNORECASE)
+        desc = re.sub(r'\bxx\d+\b', '', desc)
+
+        # Remove location codes and numbers after merchant name
+        desc = re.sub(r'\b\d{4,}\b', '', desc)  # Remove 4+ digit numbers (branch codes, etc)
+        desc = re.sub(r'\s+\d{1,3}\s+', ' ', desc)  # Remove small numbers between words
+
+        # Remove country codes
+        desc = re.sub(r'\b(AUS|AU|AUSTRALIA)\b', '', desc, flags=re.IGNORECASE)
+
+        # Remove common transaction prefixes (but keep the rest)
+        desc = re.sub(r'^(Direct Debit|BPAY|Transfer from|Transfer to|Payment to|Payment from|Deposit from)\s+\d+\s+', '', desc, flags=re.IGNORECASE)
+        desc = re.sub(r'^(DD|BP|TRF|PMT)\s+\d+\s+', '', desc, flags=re.IGNORECASE)
+
+        # Clean up multiple spaces
+        desc = re.sub(r'\s+', ' ', desc).strip()
+
+        # Check against known patterns first (using search instead of match to find anywhere in string)
+        desc_upper = desc.upper()
+
+        # Specific patterns - check these first (order matters!)
+        specific_patterns = [
+            (r'AMERICAN\s+EXPRESS', 'American Express'),
+            (r'AMEX', 'American Express'),
+            (r'COSTCO\s+FUEL', 'Costco Fuel'),
+            (r'COSTCO', 'Costco'),
+            (r'WOOLWORTHS', 'Woolworths'),
+            (r'COLES', 'Coles'),
+            (r'BUNNINGS', 'Bunnings'),
+            (r'IKEA', 'IKEA'),
+            (r'ALDI', 'Aldi'),
+            (r'IGA\b', 'IGA'),
+            (r'KMART', 'Kmart'),
+            (r'TARGET', 'Target'),
+            (r'BIG\s*W', 'Big W'),
+            (r'SPOTLIGHT', 'Spotlight'),
+            (r'LINCRAFT', 'Lincraft'),
+            (r'MCDONALD', 'McDonalds'),
+            (r'KFC', 'KFC'),
+            (r'SUBWAY', 'Subway'),
+            (r'GUZMAN', 'Guzman Y Gomez'),
+            (r'CHEMIST\s+WAREHOUSE', 'Chemist Warehouse'),
+            (r'WILSON\s+PARKING', 'Wilson Parking'),
+            (r'BEEM\s*IT', 'Beem It'),
+            (r'CALTEX', 'Caltex'),
+            (r'SHELL', 'Shell'),
+            (r'\bBP\b', 'BP'),
+            (r'ACT\s+GOV.*PARKING', 'ACT Government Parking'),
+            (r'ACT\s+GOV', 'ACT Government'),
+        ]
+
+        for pattern, normalized_name in specific_patterns:
+            if re.search(pattern, desc_upper):
+                return normalized_name
+
+        # Income patterns (must match from start)
+        if re.match(r'SAI\s+GLOBAL', desc_upper) or re.match(r'SALARY', desc_upper):
+            return 'Salary'
+        if re.search(r'LOAN\s+REPAYMENT|LN\s+REPAY', desc_upper):
+            return 'Loan Repayment'
+
+        # If no pattern matched, extract first 1-3 words (likely the merchant name)
+        words = desc.split()
+        if len(words) >= 3:
+            # Take first 3 words, remove common suffixes
+            name = ' '.join(words[:3])
+        elif len(words) >= 2:
+            name = ' '.join(words[:2])
+        else:
+            name = desc
+
+        # Remove PTY LTD and similar
+        name = re.sub(r'\b(PTY|LTD|CO|INC|LLC)\b', '', name, flags=re.IGNORECASE)
+        name = re.sub(r'\s+', ' ', name).strip()
+
+        # Capitalize properly
+        name = name.title()
+
+        return name if name else description[:50]
 
     def __init__(self, firefly_url: str, access_token: str):
         """
@@ -449,6 +546,9 @@ class FireflyService:
                 stats['skipped'] += 1
                 continue
 
+            # Normalize merchant/payee name to avoid creating duplicate expense/revenue accounts
+            normalized_merchant = self.normalize_merchant_name(txn.description)
+
             # Detect if this is a liability account (credit card, loan, mortgage)
             account_type, _ = self.detect_account_type(txn.account)
             is_liability = account_type == 'liability'
@@ -460,20 +560,20 @@ class FireflyService:
                 if txn.amount > 0:
                     # Payment/Credit: Withdrawal from liability account
                     source_account = txn.account
-                    destination_account = txn.description[:50]
+                    destination_account = normalized_merchant
                 else:
                     # Purchase/Debit: Deposit to liability account
-                    source_account = txn.description[:50]
+                    source_account = normalized_merchant
                     destination_account = txn.account
             else:
                 # For asset accounts, normal logic:
                 if txn.amount < 0:
                     # Expense: source = user account, destination = merchant/expense
                     source_account = txn.account
-                    destination_account = txn.description[:50]  # Use description as expense account
+                    destination_account = normalized_merchant  # Expense account (auto-created by Firefly)
                 else:
                     # Income: source = payer/revenue, destination = user account
-                    source_account = txn.description[:50]  # Use description as revenue source
+                    source_account = normalized_merchant  # Revenue account (auto-created by Firefly)
                     destination_account = txn.account
 
             result = self.create_transaction(txn, source_account, destination_account)

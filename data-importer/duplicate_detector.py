@@ -27,7 +27,8 @@ class Transaction:
 
     def _generate_id(self) -> str:
         """Generate unique ID based on transaction details"""
-        data = f"{self.date}_{self.description}_{abs(self.amount)}_{self.account}"
+        # Include sign of amount to distinguish refunds from purchases
+        data = f"{self.date}_{self.description}_{self.amount}_{self.account}"
         return hashlib.md5(data.encode()).hexdigest()[:16]
 
 
