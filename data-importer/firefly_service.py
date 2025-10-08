@@ -505,6 +505,26 @@ class FireflyService:
             stats['duplicates_removed'] = pre_filtered_duplicates
             stats['transfers_found'] = result['stats']['transfers_found']
 
+            # Pre-create all accounts that appear in transfers to avoid creation failures
+            if detect_transfers and len(result['transfers']) > 0:
+                transfer_accounts = set()
+                for txn1, txn2 in result['transfers']:
+                    transfer_accounts.add(txn1.account)
+                    transfer_accounts.add(txn2.account)
+
+                if transfer_accounts:
+                    print(f"\n[ACCOUNT PRE-CREATION] Found {len(transfer_accounts)} unique accounts in transfers")
+                    for account_name in sorted(transfer_accounts):
+                        # Check if already created for unique transactions
+                        if account_name not in stats['accounts_created']:
+                            account_id = self.get_or_create_account(account_name)
+                            if account_id:
+                                stats['accounts_created'].append(account_name)
+                                print(f"  ✓ Pre-created account: {account_name}")
+                            else:
+                                print(f"  ✗ Failed to create account: {account_name}")
+                                logging.error(f"Failed to pre-create transfer account: {account_name}")
+
             # Import transfers
             if detect_transfers:
                 for txn1, txn2 in result['transfers']:
