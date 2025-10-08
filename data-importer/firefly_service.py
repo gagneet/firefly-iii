@@ -54,9 +54,21 @@ class FireflyService:
         desc_upper = desc.upper()
 
         # Specific patterns - check these first (order matters!)
+        # Map AMEX card numbers to specific accounts
+        if re.search(r'376011940042008', desc_upper):
+            return 'AMEX-BusinessPlatinum-43006'
+        if re.search(r'377354019081005', desc_upper):
+            return 'AMEX-CashBack-71006'
+        if re.search(r'43006', desc_upper):  # Last 5 digits
+            return 'AMEX-BusinessPlatinum-43006'
+        if re.search(r'71006', desc_upper):  # Last 5 digits
+            return 'AMEX-CashBack-71006'
+
+        # Map generic AMEX to Business Platinum as default
+        if re.search(r'AMERICAN\s+EXPRESS', desc_upper) or re.search(r'AMEX', desc_upper):
+            return 'AMEX-BusinessPlatinum-43006'  # Default to Business Platinum
+
         specific_patterns = [
-            (r'AMERICAN\s+EXPRESS', 'American Express'),
-            (r'AMEX', 'American Express'),
             (r'COSTCO\s+FUEL', 'Costco Fuel'),
             (r'COSTCO', 'Costco'),
             (r'WOOLWORTHS', 'Woolworths'),
@@ -91,8 +103,13 @@ class FireflyService:
         # Income patterns (must match from start)
         if re.match(r'SAI\s+GLOBAL', desc_upper) or re.match(r'SALARY', desc_upper):
             return 'Salary'
+
+        # Map loan repayment numbers to specific loan accounts
+        if re.search(r'695943637', desc_upper):
+            return 'CBA-HomeLoan-466297723'  # Map based on loan number
         if re.search(r'LOAN\s+REPAYMENT|LN\s+REPAY', desc_upper):
-            return 'Loan Repayment'
+            # Generic loan repayment - default to first home loan
+            return 'CBA-HomeLoan-466297723'
 
         # If no pattern matched, extract first 1-3 words (likely the merchant name)
         words = desc.split()
