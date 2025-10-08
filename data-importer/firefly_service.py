@@ -644,8 +644,16 @@ def process_pdf_and_import(
     if not transactions:
         return {'error': 'No transactions found in PDF'}
 
-    # Auto-categorize
+    # Generate unique statement_id for this batch
+    # This ensures transactions within the same statement are never marked as duplicates
+    import hashlib
+    import time
+    import os
+    statement_id = hashlib.md5(f"{os.path.basename(pdf_path)}_{time.time()}".encode()).hexdigest()[:12]
+
+    # Assign statement_id to all transactions and auto-categorize
     for txn in transactions:
+        txn.statement_id = statement_id
         if not txn.category:
             txn.category = parser.categorize_transaction(txn)
 

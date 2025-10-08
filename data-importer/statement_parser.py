@@ -20,16 +20,25 @@ class Transaction:
     account: str = ""
     transaction_type: str = ""  # debit/credit/transfer
     transaction_id: Optional[str] = None  # Unique identifier
+    statement_id: Optional[str] = None  # Identifier for the source statement/batch
 
     def __post_init__(self):
         if self.transaction_id is None:
             self.transaction_id = self._generate_id()
 
     def _generate_id(self) -> str:
-        """Generate unique ID based on transaction details"""
+        """
+        Generate unique ID based on transaction details
+
+        Note: If statement_id is provided, transactions from the same statement
+        will never be considered duplicates of each other, even if they have
+        identical date/description/amount (e.g., buying same item twice online)
+        """
         import hashlib
-        # Include sign of amount to distinguish refunds from purchases
+        # Include statement_id to ensure transactions within same statement are unique
         data = f"{self.date}_{self.description}_{self.amount}_{self.account}"
+        if self.statement_id:
+            data += f"_{self.statement_id}"
         return hashlib.md5(data.encode()).hexdigest()[:16]
 
     def to_dict(self):

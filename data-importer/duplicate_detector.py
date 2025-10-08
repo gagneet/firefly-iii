@@ -20,15 +20,24 @@ class Transaction:
     account: str = ""
     transaction_type: str = ""
     transaction_id: str = None  # Unique identifier
+    statement_id: str = None  # Identifier for the source statement/batch
 
     def __post_init__(self):
         if self.transaction_id is None:
             self.transaction_id = self._generate_id()
 
     def _generate_id(self) -> str:
-        """Generate unique ID based on transaction details"""
-        # Include sign of amount to distinguish refunds from purchases
+        """
+        Generate unique ID based on transaction details
+
+        Note: If statement_id is provided, transactions from the same statement
+        will never be considered duplicates of each other, even if they have
+        identical date/description/amount (e.g., buying same item twice online)
+        """
+        # Include statement_id to ensure transactions within same statement are unique
         data = f"{self.date}_{self.description}_{self.amount}_{self.account}"
+        if self.statement_id:
+            data += f"_{self.statement_id}"
         return hashlib.md5(data.encode()).hexdigest()[:16]
 
 
@@ -142,6 +151,9 @@ class DuplicateDetector:
         Find duplicate transactions in a list
         Optimized using transaction_id hash for O(n) performance
 
+        Note: Transactions with the same statement_id are never considered duplicates
+        of each other, so the hash-based detection naturally handles this case.
+
         Returns:
             Tuple of (unique_transactions, duplicate_pairs)
         """
@@ -151,11 +163,13 @@ class DuplicateDetector:
 
         for txn in transactions:
             # Use transaction_id hash for quick duplicate detection
-            # transaction_id is based on: date, description, amount, account
+            # transaction_id is based on: date, description, amount, account, statement_id
+            # Because statement_id is included in the hash, transactions from the same
+            # statement will have different IDs even if all other fields match
             txn_id = txn.transaction_id
 
             if txn_id in seen_ids:
-                # Found exact duplicate (same date, description, amount, account)
+                # Found exact duplicate (same date, description, amount, account, statement)
                 duplicates.append((seen_ids[txn_id], txn))
             else:
                 # Not a duplicate - add to unique list
