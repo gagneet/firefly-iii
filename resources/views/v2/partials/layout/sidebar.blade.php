@@ -206,6 +206,7 @@
 </aside>
 
 <!-- simple script for logout thing -->
+
 <script nonce="{{ \FireflyIII\Support\Http\ContentSecurityPolicy::getNonce() }}">
     document.addEventListener('DOMContentLoaded', function() {
         const logoutLink = document.querySelector('.logout-link');
