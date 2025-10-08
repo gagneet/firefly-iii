@@ -218,8 +218,8 @@
                     <span class="badge badge-info"><strong>{{ bulkSummary.totalTransfers }}</strong></span>
                   </td>
                   <td class="text-center">
-                    <span class="badge" :class="bulkSummary.failedCount > 0 ? 'badge-danger' : 'badge-default'">
-                      <strong>{{ bulkSummary.failedCount }}</strong>
+                    <span class="badge" :class="bulkSummary.totalErrors > 0 ? 'badge-danger' : 'badge-default'">
+                      <strong>{{ bulkSummary.totalErrors }}</strong>
                     </span>
                   </td>
                 </tr>
