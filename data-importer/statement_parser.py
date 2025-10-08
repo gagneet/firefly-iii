@@ -44,15 +44,28 @@ class AmexParser:
         with pdfplumber.open(pdf_path) as pdf:
             # Extract year from statement date on first page
             year = '2025'
+            card_type = 'AMEX'  # Default
             first_page_text = pdf.pages[0].extract_text()
             if first_page_text:
-                # Look for "Date\nMonth DD, YYYY" pattern
-                year_match = re.search(r'Date\s+\w+\s+\d{1,2},\s+(\d{4})', first_page_text)
+                # Look for "Month DD, YYYY" pattern (works for both formats)
+                year_match = re.search(r'(\w+)\s+(\d{1,2}),\s+(\d{4})', first_page_text)
                 if year_match:
-                    year = year_match.group(1)
+                    year = year_match.group(3)
 
-            # Process all pages starting from page 2 (index 2)
-            for page_num in range(2, len(pdf.pages)):
+                # Detect card type from first page
+                if 'Platinum Business' in first_page_text or 'Business Platinum' in first_page_text:
+                    card_type = 'AMEX Business Platinum'
+                elif 'Cashback' in first_page_text:
+                    card_type = 'AMEX Cashback'
+                elif 'Explorer' in first_page_text:
+                    card_type = 'AMEX Explorer'
+                elif 'Platinum' in first_page_text:
+                    card_type = 'AMEX Platinum'
+                elif 'Business' in first_page_text:
+                    card_type = 'AMEX Business'
+
+            # Process all pages starting from page 1 (index 0) to catch payments on first page
+            for page_num in range(0, len(pdf.pages)):
                 page = pdf.pages[page_num]
                 text = page.extract_text()
 
@@ -78,9 +91,10 @@ class AmexParser:
                         i += 1
                         continue
 
-                    # Match transaction line: "MonthDay DESCRIPTION AMOUNT"
-                    # Date format: "February22", "March1", etc. (no space between month and day!)
-                    date_match = re.match(r'^([A-Z][a-z]+)(\d{1,2})\s+(.+)$', line)
+                    # Match transaction line - two formats:
+                    # Format 1 (Cashback): "February22 DESCRIPTION AMOUNT" (no space)
+                    # Format 2 (Business): "December 4 DESCRIPTION AMOUNT" (with space)
+                    date_match = re.match(r'^([A-Z][a-z]+)\s*(\d{1,2})\s+(.+)$', line)
 
                     if date_match:
                         month_str = date_match.group(1)
@@ -101,7 +115,7 @@ class AmexParser:
                             is_credit = False
                             if i + 1 < len(lines):
                                 next_line = lines[i + 1].strip()
-                                if next_line == 'CR' or 'PAYMENT RECEIVED' in description.upper() or 'CASHBACK' in description.upper():
+                                if next_line == 'CR' or 'PAYMENT RECEIVED' in description.upper() or 'DIRECT DEBIT RECEIVED' in description.upper() or 'CASHBACK' in description.upper():
                                     is_credit = True
 
                                 # Skip foreign currency lines
@@ -124,7 +138,7 @@ class AmexParser:
                                     date=date_obj.strftime('%Y-%m-%d'),
                                     description=description,
                                     amount=amount,
-                                    account='AMEX',
+                                    account=card_type,
                                     transaction_type='credit' if is_credit else 'debit'
                                 ))
                             except ValueError as e:

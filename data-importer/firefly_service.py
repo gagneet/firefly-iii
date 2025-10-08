@@ -7,6 +7,7 @@ Handles interaction with Firefly III API for creating transactions and accounts
 import requests
 import json
 import sys
+import logging
 from typing import List, Dict, Optional
 from statement_parser import Transaction, StatementParser
 from duplicate_detector import DuplicateDetector
@@ -33,6 +34,41 @@ class FireflyService:
         # Cache for account lookups to reduce API calls
         self._account_cache = {}  # name -> account_id
         self._account_list_cache = {}  # account_type -> list of accounts
+
+    @staticmethod
+    def detect_account_type(account_name: str) -> tuple:
+        """
+        Detect the appropriate Firefly III account type based on account name
+
+        Args:
+            account_name: Name of the account
+
+        Returns:
+            Tuple of (type, liability_type) for API
+        """
+        account_lower = account_name.lower()
+
+        # Credit cards (check first to avoid catching 'cashback' as savings)
+        if any(keyword in account_lower for keyword in [
+            'amex', 'american express', 'mastercard', 'visa',
+            'credit card', 'diamond', 'platinum', 'cashback'
+        ]):
+            return ('liability', 'debt')
+
+        # Mortgages / Home Loans (check before general 'loan')
+        if any(keyword in account_lower for keyword in [
+            'home loan', 'homeloan', 'home-loan', 'mortgage'
+        ]):
+            return ('liability', 'mortgage')
+
+        # Personal Loans (check for specific patterns)
+        if any(keyword in account_lower for keyword in [
+            'personal loan', 'car loan', '-pl-', 'loan'
+        ]):
+            return ('liability', 'loan')
+
+        # Default to asset account (bank accounts, savings, etc.)
+        return ('asset', None)
 
     def test_connection(self) -> bool:
         """Test connection to Firefly III API"""
@@ -91,25 +127,41 @@ class FireflyService:
 
         return None
 
-    def create_account(self, account_name: str, account_type: str = 'asset', currency_code: str = 'AUD') -> Optional[Dict]:
+    def create_account(self, account_name: str, account_type: tuple = None, currency_code: str = 'AUD') -> Optional[Dict]:
         """
         Create a new account in Firefly III
 
         Args:
             account_name: Name of the account
-            account_type: Type (asset, expense, revenue)
+            account_type: Tuple of (type, liability_type) or None to auto-detect
             currency_code: Currency code (default AUD)
 
         Returns:
             Created account dict or None
         """
+        # Auto-detect if not provided
+        if account_type is None:
+            account_type = self.detect_account_type(account_name)
+
+        type_str, liability_type = account_type
+
         payload = {
             'name': account_name,
-            'type': account_type,
+            'type': type_str,
             'currency_code': currency_code,
             'active': True,
-            'account_role': 'defaultAsset' if account_type == 'asset' else None  # Required for asset accounts
         }
+
+        # Add account_role for asset accounts
+        if type_str == 'asset':
+            payload['account_role'] = 'defaultAsset'
+
+        # For liability accounts, add liability-specific fields
+        if type_str == 'liability':
+            payload['liability_type'] = liability_type
+            payload['liability_direction'] = 'credit'  # Credit cards/loans are credits (you owe)
+            payload['opening_balance'] = '0'
+            payload['opening_balance_date'] = '2020-01-01'
 
         try:
             response = requests.post(
@@ -128,20 +180,44 @@ class FireflyService:
             print(f"Error: {e}")
             return None
 
-    def get_or_create_account(self, account_name: str, account_type: str = 'asset') -> Optional[str]:
+    def get_or_create_account(self, account_name: str, account_type: tuple = None) -> Optional[str]:
         """
         Get account ID by name, create if doesn't exist
+        If account_type is None, auto-detect based on account name
 
         Returns:
             Account ID or None
         """
-        # Try to find existing account
-        account = self.find_account_by_name(account_name, account_type)
+        # Auto-detect account type if not provided
+        if account_type is None:
+            account_type = self.detect_account_type(account_name)
+            type_str, liability_type = account_type
+            liability_str = f" ({liability_type})" if liability_type else ""
+            print(f"Auto-detected account type for '{account_name}': {type_str}{liability_str}")
 
-        if account:
-            return account['id']
+        type_str, liability_type = account_type
 
-        # Create new account
+        # Try to find existing account - search across common type names
+        # Map to database type names for searching
+        if type_str == 'liability':
+            if liability_type == 'debt':
+                search_types = ['Credit card', 'Liability credit account']
+            elif liability_type == 'mortgage':
+                search_types = ['Mortgage']
+            elif liability_type == 'loan':
+                search_types = ['Loan']
+            else:
+                search_types = []
+        else:
+            search_types = ['Asset account']
+
+        for search_type in search_types:
+            account = self.find_account_by_name(account_name, search_type)
+            if account:
+                print(f"Found existing account: {account_name} (ID: {account['id']})")
+                return account['id']
+
+        # Create new account with detected type
         account = self.create_account(account_name, account_type)
 
         if account:
@@ -161,15 +237,34 @@ class FireflyService:
         Returns:
             Created transaction dict or None
         """
-        # Determine transaction type
-        if transaction.amount < 0:
-            # Withdrawal (expense)
-            transaction_type = 'withdrawal'
-            amount = abs(transaction.amount)
+        # Detect account type to determine transaction type correctly
+        source_type, _ = self.detect_account_type(source_account)
+        dest_type, _ = self.detect_account_type(destination_account)
+
+        # Determine transaction type based on account types and amount
+        # For liability accounts, positive amounts are payments (withdrawals)
+        is_liability_account = source_type == 'liability' or dest_type == 'liability'
+
+        if is_liability_account:
+            # For liability accounts:
+            # - If source is liability (positive amount) = withdrawal (payment)
+            # - If dest is liability (negative amount) = deposit (purchase)
+            if transaction.amount > 0:
+                transaction_type = 'withdrawal'
+                amount = transaction.amount
+            else:
+                transaction_type = 'deposit'
+                amount = abs(transaction.amount)
         else:
-            # Deposit (income)
-            transaction_type = 'deposit'
-            amount = transaction.amount
+            # For asset accounts (normal logic):
+            if transaction.amount < 0:
+                # Withdrawal (expense)
+                transaction_type = 'withdrawal'
+                amount = abs(transaction.amount)
+            else:
+                # Deposit (income)
+                transaction_type = 'deposit'
+                amount = transaction.amount
 
         payload = {
             'error_if_duplicate_hash': True,
@@ -298,7 +393,8 @@ class FireflyService:
             'duplicates': 0,
             'transfers': 0,
             'errors': 0,
-            'accounts_created': []
+            'accounts_created': [],
+            'skipped': 0  # Track skipped transactions
         }
 
         # Detect duplicates and transfers
@@ -306,7 +402,10 @@ class FireflyService:
             detector = DuplicateDetector()
             result = detector.categorize_duplicates(transactions)
 
-            stats['duplicates_removed'] = result['stats']['exact_duplicates_removed']
+            # Count pre-filtered duplicates as part of total duplicates
+            pre_filtered_duplicates = result['stats']['exact_duplicates_removed']
+            stats['duplicates'] = pre_filtered_duplicates
+            stats['duplicates_removed'] = pre_filtered_duplicates
             stats['transfers_found'] = result['stats']['transfers_found']
 
             # Import transfers
@@ -316,20 +415,29 @@ class FireflyService:
                     if transfer_result:
                         if transfer_result.get('status') == 'duplicate':
                             stats['duplicates'] += 1
+                            # Log duplicate transfer
+                            print(f"  [DUPLICATE TRANSFER] {txn1.date} | ${abs(txn1.amount):>9.2f} | {txn1.account} → {txn2.account}")
+                            logging.warning(f"DUPLICATE transfer detected: Date={txn1.date}, Amount=${abs(txn1.amount):.2f}, From={txn1.account}, To={txn2.account}, Desc='{txn1.description}'")
                         else:
                             stats['transfers'] += 1
+                            # Log successful transfer
+                            print(f"  [TRANSFER] {txn1.date} | ${abs(txn1.amount):>9.2f} | {txn1.account} → {txn2.account}")
+                            logging.info(f"TRANSFER created: Date={txn1.date}, Amount=${abs(txn1.amount):.2f}, From={txn1.account}, To={txn2.account}")
                     else:
                         stats['errors'] += 1
+                        # Log transfer error
+                        print(f"  [ERROR TRANSFER] Failed: {txn1.date} | ${abs(txn1.amount):>9.2f} | {txn1.account} → {txn2.account}")
+                        logging.error(f"ERROR creating transfer: Date={txn1.date}, Amount=${abs(txn1.amount):.2f}, From={txn1.account}, To={txn2.account}, Desc='{txn1.description}'")
 
             # Import unique transactions
             transactions_to_import = result['unique']
         else:
             transactions_to_import = transactions
 
-        # Ensure all accounts exist
+        # Ensure all accounts exist (auto-detect account type)
         accounts_needed = set(txn.account for txn in transactions_to_import)
         for account_name in accounts_needed:
-            account_id = self.get_or_create_account(account_name, 'asset')
+            account_id = self.get_or_create_account(account_name)  # Auto-detect type
             if account_id and account_name not in stats['accounts_created']:
                 stats['accounts_created'].append(account_name)
 
@@ -338,26 +446,51 @@ class FireflyService:
             # Skip zero-amount transactions (like fee waivers)
             if abs(txn.amount) < 0.01:
                 print(f"Skipping zero-amount transaction: {txn.description}")
+                stats['skipped'] += 1
                 continue
 
-            if txn.amount < 0:
-                # Expense: source = user account, destination = merchant/expense
-                source_account = txn.account
-                destination_account = txn.description[:50]  # Use description as expense account
+            # Detect if this is a liability account (credit card, loan, mortgage)
+            account_type, _ = self.detect_account_type(txn.account)
+            is_liability = account_type == 'liability'
+
+            if is_liability:
+                # For liability accounts, the logic is INVERTED:
+                # - Positive amount (credit/payment) = withdrawal (reduces debt)
+                # - Negative amount (debit/purchase) = deposit (increases debt)
+                if txn.amount > 0:
+                    # Payment/Credit: Withdrawal from liability account
+                    source_account = txn.account
+                    destination_account = txn.description[:50]
+                else:
+                    # Purchase/Debit: Deposit to liability account
+                    source_account = txn.description[:50]
+                    destination_account = txn.account
             else:
-                # Income: source = payer/revenue, destination = user account
-                source_account = txn.description[:50]  # Use description as revenue source
-                destination_account = txn.account
+                # For asset accounts, normal logic:
+                if txn.amount < 0:
+                    # Expense: source = user account, destination = merchant/expense
+                    source_account = txn.account
+                    destination_account = txn.description[:50]  # Use description as expense account
+                else:
+                    # Income: source = payer/revenue, destination = user account
+                    source_account = txn.description[:50]  # Use description as revenue source
+                    destination_account = txn.account
 
             result = self.create_transaction(txn, source_account, destination_account)
 
             if result:
                 if result.get('status') == 'duplicate':
                     stats['duplicates'] += 1
+                    # Log duplicate transaction details
+                    print(f"  [DUPLICATE] {txn.date} | ${txn.amount:>9.2f} | {txn.description[:60]}")
+                    logging.warning(f"DUPLICATE transaction detected: Date={txn.date}, Amount=${txn.amount:.2f}, Desc='{txn.description}', Account={txn.account}")
                 else:
                     stats['created'] += 1
             else:
                 stats['errors'] += 1
+                # Log error details
+                print(f"  [ERROR] Failed to create: {txn.date} | ${txn.amount:>9.2f} | {txn.description[:60]}")
+                logging.error(f"ERROR creating transaction: Date={txn.date}, Amount=${txn.amount:.2f}, Desc='{txn.description}', Account={txn.account}, Source={source_account}, Dest={destination_account}")
 
         return stats
 
