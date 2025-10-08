@@ -147,29 +147,83 @@
 
           <!-- Per-file results -->
           <div v-if="bulkResults.length > 0" class="bulk-results">
-            <h5>Completed Files:</h5>
-            <table class="table table-condensed table-striped">
+            <h5><i class="fa fa-files-o"></i> Completed Files:</h5>
+            <table class="table table-condensed table-striped table-bordered">
               <thead>
-                <tr>
+                <tr class="active">
                   <th>File</th>
-                  <th>Status</th>
-                  <th>Transactions</th>
-                  <th>Created</th>
-                  <th>Duplicates</th>
+                  <th class="text-center">Status</th>
+                  <th class="text-center" title="Total transactions found in PDF">
+                    <i class="fa fa-list"></i> Total
+                  </th>
+                  <th class="text-center" title="Transactions successfully imported">
+                    <i class="fa fa-plus-circle text-success"></i> Created
+                  </th>
+                  <th class="text-center" title="Duplicate transactions skipped">
+                    <i class="fa fa-clone text-warning"></i> Duplicates
+                  </th>
+                  <th class="text-center" title="Transfer transactions detected">
+                    <i class="fa fa-exchange text-info"></i> Transfers
+                  </th>
+                  <th class="text-center" title="Errors encountered">
+                    <i class="fa fa-exclamation-circle text-danger"></i> Errors
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="(result, index) in bulkResults" :key="index" :class="result.success ? '' : 'danger'">
-                  <td>{{ result.filename }}</td>
                   <td>
-                    <i class="fa" :class="result.success ? 'fa-check text-success' : 'fa-times text-danger'"></i>
-                    {{ result.success ? 'Success' : 'Failed' }}
+                    <i class="fa fa-file-pdf-o"></i>
+                    <strong>{{ result.filename }}</strong>
                   </td>
-                  <td>{{ result.data ? result.data.total : 0 }}</td>
-                  <td>{{ result.data ? result.data.created : 0 }}</td>
-                  <td>{{ result.data ? result.data.duplicates : 0 }}</td>
+                  <td class="text-center">
+                    <i class="fa" :class="result.success ? 'fa-check-circle text-success' : 'fa-times-circle text-danger'"></i>
+                    <strong>{{ result.success ? 'Success' : 'Failed' }}</strong>
+                  </td>
+                  <td class="text-center">
+                    <span class="badge badge-default">{{ result.data ? result.data.total : 0 }}</span>
+                  </td>
+                  <td class="text-center">
+                    <span class="badge badge-success">{{ result.data ? result.data.created : 0 }}</span>
+                  </td>
+                  <td class="text-center">
+                    <span class="badge badge-warning">{{ result.data ? result.data.duplicates : 0 }}</span>
+                  </td>
+                  <td class="text-center">
+                    <span class="badge badge-info">{{ result.data ? (result.data.transfers || 0) : 0 }}</span>
+                  </td>
+                  <td class="text-center">
+                    <span class="badge" :class="result.data && result.data.errors > 0 ? 'badge-danger' : 'badge-default'">
+                      {{ result.data ? (result.data.errors || 0) : (result.success ? 0 : 1) }}
+                    </span>
+                  </td>
                 </tr>
               </tbody>
+              <tfoot v-if="bulkResults.length > 1">
+                <tr class="info">
+                  <td><strong>TOTALS</strong></td>
+                  <td class="text-center">
+                    <strong>{{ bulkSummary.successCount }}/{{ bulkSummary.totalFiles }}</strong>
+                  </td>
+                  <td class="text-center">
+                    <span class="badge badge-default"><strong>{{ bulkSummary.totalTransactions }}</strong></span>
+                  </td>
+                  <td class="text-center">
+                    <span class="badge badge-success"><strong>{{ bulkSummary.totalCreated }}</strong></span>
+                  </td>
+                  <td class="text-center">
+                    <span class="badge badge-warning"><strong>{{ bulkSummary.totalDuplicates }}</strong></span>
+                  </td>
+                  <td class="text-center">
+                    <span class="badge badge-info"><strong>{{ bulkSummary.totalTransfers }}</strong></span>
+                  </td>
+                  <td class="text-center">
+                    <span class="badge" :class="bulkSummary.failedCount > 0 ? 'badge-danger' : 'badge-default'">
+                      <strong>{{ bulkSummary.failedCount }}</strong>
+                    </span>
+                  </td>
+                </tr>
+              </tfoot>
             </table>
           </div>
         </div>
@@ -229,41 +283,57 @@
         </div>
 
         <!-- Results - Bulk Mode Summary -->
-        <div v-if="bulkComplete && bulkMode" class="alert alert-success">
-          <h4>
+        <div v-if="bulkComplete && bulkMode" class="alert alert-success" style="margin-top: 20px; border: 2px solid #3c763d;">
+          <h4 style="margin-top: 0;">
             <i class="fa fa-check-circle"></i>
-            Bulk Import Complete!
+            <strong>Bulk Import Complete!</strong>
           </h4>
+          <hr style="margin: 15px 0; border-top: 1px solid #3c763d;">
           <div class="import-stats">
-            <table class="table table-condensed">
-              <tr>
-                <td><strong>Total files processed:</strong></td>
-                <td>{{ bulkSummary.filesProcessed }} / {{ bulkSummary.totalFiles }}</td>
-              </tr>
-              <tr class="success">
-                <td><strong>Successful imports:</strong></td>
-                <td>{{ bulkSummary.successCount }}</td>
-              </tr>
-              <tr v-if="bulkSummary.failedCount > 0" class="danger">
-                <td><strong>Failed imports:</strong></td>
-                <td>{{ bulkSummary.failedCount }}</td>
-              </tr>
-              <tr>
-                <td><strong>Total transactions found:</strong></td>
-                <td>{{ bulkSummary.totalTransactions }}</td>
-              </tr>
-              <tr class="success">
-                <td><strong>Transactions imported:</strong></td>
-                <td>{{ bulkSummary.totalCreated }}</td>
-              </tr>
-              <tr class="warning">
-                <td><strong>Duplicates skipped:</strong></td>
-                <td>{{ bulkSummary.totalDuplicates }}</td>
-              </tr>
-              <tr v-if="bulkSummary.totalTransfers > 0" class="info">
-                <td><strong>Transfers detected:</strong></td>
-                <td>{{ bulkSummary.totalTransfers }}</td>
-              </tr>
+            <h5 style="margin-top: 0; margin-bottom: 15px;"><i class="fa fa-bar-chart"></i> Import Summary</h5>
+            <table class="table table-condensed table-bordered" style="background-color: white;">
+              <thead>
+                <tr style="background-color: #dff0d8;">
+                  <th colspan="2" class="text-center"><strong>FILES</strong></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Total files processed:</strong></td>
+                  <td class="text-right"><strong>{{ bulkSummary.filesProcessed }} / {{ bulkSummary.totalFiles }}</strong></td>
+                </tr>
+                <tr class="success">
+                  <td><i class="fa fa-check-circle"></i> <strong>Successful imports:</strong></td>
+                  <td class="text-right"><strong>{{ bulkSummary.successCount }}</strong></td>
+                </tr>
+                <tr v-if="bulkSummary.failedCount > 0" class="danger">
+                  <td><i class="fa fa-times-circle"></i> <strong>Failed imports:</strong></td>
+                  <td class="text-right"><strong>{{ bulkSummary.failedCount }}</strong></td>
+                </tr>
+              </tbody>
+              <thead>
+                <tr style="background-color: #dff0d8;">
+                  <th colspan="2" class="text-center"><strong>TRANSACTIONS</strong></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><i class="fa fa-list"></i> <strong>Total transactions found:</strong></td>
+                  <td class="text-right"><strong>{{ bulkSummary.totalTransactions }}</strong></td>
+                </tr>
+                <tr class="success">
+                  <td><i class="fa fa-plus-circle"></i> <strong>Transactions imported:</strong></td>
+                  <td class="text-right"><strong style="font-size: 16px; color: #3c763d;">{{ bulkSummary.totalCreated }}</strong></td>
+                </tr>
+                <tr class="warning">
+                  <td><i class="fa fa-clone"></i> <strong>Duplicates skipped:</strong></td>
+                  <td class="text-right"><strong>{{ bulkSummary.totalDuplicates }}</strong></td>
+                </tr>
+                <tr v-if="bulkSummary.totalTransfers > 0" class="info">
+                  <td><i class="fa fa-exchange"></i> <strong>Transfers detected:</strong></td>
+                  <td class="text-right"><strong>{{ bulkSummary.totalTransfers }}</strong></td>
+                </tr>
+              </tbody>
             </table>
           </div>
         </div>
